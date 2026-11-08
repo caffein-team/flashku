@@ -9,6 +9,7 @@ dotenv.config();
 
 const app: Application = express();
 
+app.use(express.static('public'));
 app.use(cors());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
