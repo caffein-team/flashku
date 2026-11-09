@@ -22,6 +22,8 @@ type AuthContextValue = {
   /** Simpan JWT dari hasil login/verify/google. */
   signIn: (result: AuthResult) => Promise<void>;
   signOut: () => Promise<void>;
+  /** SEMENTARA: masuk tanpa backend untuk mengerjakan UI. Hapus sebelum rilis. */
+  devSignIn: () => void;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -56,6 +58,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setStatus('authenticated');
   }, []);
 
+  const devSignIn = useCallback(() => {
+    setUser({ username: 'Dev User', email: 'dev@flashku.local' });
+    setStatus('authenticated');
+  }, []);
+
   // Restore sesi saat app dibuka.
   useEffect(() => {
     let active = true;
@@ -85,8 +92,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [clearSession]);
 
   const value = useMemo(
-    () => ({ status, user, signIn, signOut }),
-    [status, user, signIn, signOut],
+    () => ({ status, user, signIn, signOut, devSignIn }),
+    [status, user, signIn, signOut, devSignIn],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

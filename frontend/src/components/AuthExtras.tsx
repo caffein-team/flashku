@@ -1,5 +1,7 @@
 import { Link, type Href } from 'expo-router';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+
+import { useAuth } from '@/auth/AuthProvider';
 
 import { font } from '@/theme/fonts';
 import { useTheme } from '@/theme/ThemeProvider';
@@ -44,6 +46,17 @@ export function GoogleButton({
   );
 }
 
+/** SEMENTARA: lewati login untuk mengerjakan halaman utama. Hapus sebelum rilis. */
+export function TempSkipButton() {
+  const { colors } = useTheme();
+  const { devSignIn } = useAuth();
+  return (
+    <Pressable onPress={devSignIn} hitSlop={8} style={styles.skip} accessibilityRole="button">
+      <Text style={[styles.skipText, { color: colors.textMuted }]}>Lewati ke halaman utama (sementara)</Text>
+    </Pressable>
+  );
+}
+
 export function FooterLink({ text, linkText, href }: { text: string; linkText: string; href: Href }) {
   const { colors } = useTheme();
   return (
@@ -62,5 +75,7 @@ const styles = StyleSheet.create({
   or: { fontFamily: font.regular, fontSize: 12 },
   g: { width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
   gText: { fontFamily: font.bold, fontSize: 12 },
+  skip: { alignSelf: 'center', paddingVertical: 4 },
+  skipText: { fontFamily: font.medium, fontSize: 13, textDecorationLine: 'underline' },
   footerText: { fontFamily: font.regular, fontSize: 14 },
 });

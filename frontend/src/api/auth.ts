@@ -22,7 +22,8 @@ function parseAuthResult(data: any): AuthResult {
   return { token, user: root.user };
 }
 
-export type RegisterInput = { username: string; email: string; password: string };
+/** Backend memakai field `name` untuk username. */
+export type RegisterInput = { name: string; email: string; password: string };
 export type VerifyInput = { email: string; otp: string };
 
 // Metadata akun Google yang dikirim utuh ke backend.
@@ -41,9 +42,10 @@ export type GoogleAuthPayload = {
 };
 
 export const authApi = {
-  /** Daftar. Berhasil = akun dibuat (belum terverifikasi). */
-  async register(input: RegisterInput) {
-    await api.post('/auth/register', input);
+  /** Daftar. Jika backend langsung mengembalikan token, user bisa masuk tanpa login ulang. */
+  async register(input: RegisterInput): Promise<AuthResult> {
+    const res = await api.post('/auth/register', input);
+    return parseAuthResult(res.data);
   },
 
   /** Kirim kode OTP ke email. */

@@ -14,6 +14,8 @@ export type Colors = {
   banner: string;
   bannerText: string;
   tabActive: string;
+  track: string;
+  success: string;
 };
 
 export const lightColors: Colors = {
@@ -32,6 +34,8 @@ export const lightColors: Colors = {
   banner: '#DAD8F8',
   bannerText: '#1E1B5E',
   tabActive: '#DAD8F8',
+  track: '#DDDCE3',
+  success: '#16A34A',
 };
 
 export const darkColors: Colors = {
@@ -50,6 +54,8 @@ export const darkColors: Colors = {
   banner: '#2B2A5C',
   bannerText: '#E4E3FF',
   tabActive: '#2B2A5C',
+  track: '#363648',
+  success: '#34D399',
 };
 
 // Header ungu tetap sama di kedua tema.

@@ -8,7 +8,7 @@ import { authApi } from '@/api/auth';
 import { getErrorBody, getErrorMessage, getErrorStatus } from '@/api/client';
 import { useAuth } from '@/auth/AuthProvider';
 import { useGoogleSignIn } from '@/auth/useGoogleSignIn';
-import { FooterLink, GoogleButton, OrDivider } from '@/components/AuthExtras';
+import { FooterLink, GoogleButton, OrDivider, TempSkipButton } from '@/components/AuthExtras';
 import { AuthScreen } from '@/components/AuthScreen';
 import { Button } from '@/components/Button';
 import { TextField } from '@/components/TextField';
@@ -111,6 +111,7 @@ export default function LoginScreen() {
         loading={google.loading}
         disabled={busy}
       />
+      <TempSkipButton />
     </AuthScreen>
   );
 }

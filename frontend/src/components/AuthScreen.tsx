@@ -53,7 +53,7 @@ export function AuthScreen({
             <View
               style={[
                 styles.logo,
-                { width: logo, height: logo, borderRadius: logo * 0.3 },
+                { width: logo, height: logo, borderRadius: logo * 0.2 },
               ]}
             >
               {/* <Ionicons name="copy-outline" size={logo * 0.5} color={headerColor} /> */}

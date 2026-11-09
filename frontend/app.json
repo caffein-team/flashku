@@ -37,7 +37,8 @@
       "reactCompiler": true
     },
     "platforms": [
-      "android"
+      "android",
+      "web"
     ]
   }
 }

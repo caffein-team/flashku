@@ -1,6 +1,6 @@
 import axios, { AxiosError } from 'axios';
 
-export const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://10.0.2.2:3000';
+export const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'https://flashku.dewayani.web.id/api';
 
 // Token disimpan di memori supaya interceptor tidak perlu async.
 // AuthProvider yang mengisi dan membersihkannya.
@@ -38,7 +38,15 @@ api.interceptors.response.use(
   },
 );
 
-type ErrorBody = { message?: string | string[]; error?: string; code?: string; email?: string };
+type ErrorBody = {
+  status?: string;
+  message?: string | string[];
+  error?: string;
+  code?: string;
+  email?: string;
+  /** Error validasi per field, mis. { email: "Email is invalid" }. */
+  errors?: Record<string, string>;
+};
 
 export function getErrorBody(error: unknown): ErrorBody {
   if (axios.isAxiosError(error)) return (error.response?.data as ErrorBody) ?? {};
@@ -53,9 +61,11 @@ export function getErrorMessage(error: unknown): string {
   if (axios.isAxiosError(error)) {
     if (!error.response) return 'Tidak dapat terhubung ke server. Periksa koneksi internetmu.';
     const body = getErrorBody(error);
+    if (body.errors && Object.keys(body.errors).length) return Object.values(body.errors).join('\n');
     const msg = Array.isArray(body.message) ? body.message.join('\n') : body.message ?? body.error;
     if (msg) return msg;
     if (error.response.status >= 500) return 'Terjadi kesalahan pada server. Coba lagi nanti.';
   }
+  if (error instanceof Error && error.message) return error.message;
   return 'Terjadi kesalahan. Coba lagi.';
 }
