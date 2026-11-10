@@ -1,4 +1,4 @@
-import { api } from './client';
+import { api } from "./client";
 
 /**
  * Kontrak endpoint auth. Bentuk body/response di bawah adalah ASUMSI
@@ -16,10 +16,8 @@ export type AuthUser = {
 export type AuthResult = { token: string | null; user?: AuthUser };
 
 // Backend bisa membungkus token dengan nama berbeda; toleran terhadap beberapa bentuk umum.
-function parseAuthResult(data: any): AuthResult {
-  const root = data?.data ?? data ?? {};
-  const token: string | null = root.token ?? root.access_token ?? root.accessToken ?? root.jwt ?? null;
-  return { token, user: root.user };
+function parseAuthResult(body: any): AuthResult {
+  return { token: body?.token ?? null, user: body?.data ?? undefined };
 }
 
 /** Backend memakai field `name` untuk username. */
@@ -44,29 +42,29 @@ export type GoogleAuthPayload = {
 export const authApi = {
   /** Daftar. Jika backend langsung mengembalikan token, user bisa masuk tanpa login ulang. */
   async register(input: RegisterInput): Promise<AuthResult> {
-    const res = await api.post('/auth/register', input);
+    const res = await api.post("/auth/register", input);
     return parseAuthResult(res.data);
   },
 
   /** Kirim kode OTP ke email. */
   async sendOtp(email: string) {
-    await api.post('/auth/send-otp', { email });
+    await api.post("/auth/verify/send-otp", { email });
   },
 
   /** Verifikasi OTP. Jika backend mengembalikan JWT, user langsung masuk. */
   async verify(input: VerifyInput): Promise<AuthResult> {
-    const res = await api.post('/auth/verify', input);
+    const res = await api.post("/auth/verify/confirm-otp", input);
     return parseAuthResult(res.data);
   },
 
   /** `identifier` = username atau email. */
   async login(identifier: string, password: string): Promise<AuthResult> {
-    const res = await api.post('/auth/login', { identifier, password });
+    const res = await api.post("/auth/login", { identifier, password });
     return parseAuthResult(res.data);
   },
 
   async google(payload: GoogleAuthPayload): Promise<AuthResult> {
-    const res = await api.post('/auth/google', payload);
+    const res = await api.post("/auth/google", payload);
     return parseAuthResult(res.data);
   },
 };

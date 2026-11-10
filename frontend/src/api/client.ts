@@ -59,7 +59,11 @@ export function getErrorStatus(error: unknown): number | undefined {
 
 export function getErrorMessage(error: unknown): string {
   if (axios.isAxiosError(error)) {
-    if (!error.response) return 'Tidak dapat terhubung ke server. Periksa koneksi internetmu.';
+    if (!error.response) {
+      const base = 'Tidak dapat terhubung ke server. Periksa koneksi internetmu.';
+      // Saat development, tampilkan URL dan kode error supaya penyebabnya mudah dilacak.
+      return __DEV__ ? `${base}\n\n[${error.code ?? 'NO_RESPONSE'}] ${API_URL}` : base;
+    }
     const body = getErrorBody(error);
     if (body.errors && Object.keys(body.errors).length) return Object.values(body.errors).join('\n');
     const msg = Array.isArray(body.message) ? body.message.join('\n') : body.message ?? body.error;
