@@ -1,15 +1,11 @@
-import { ObjectId } from "mongodb";
+import { IUser } from "./index";
 
-export interface IUser {
-    _id?: ObjectId;
-    name: string;
-    email: string;
-    email_verified_at?: Date;
-    otp?: string;
-    otp_expires_at?: Date;
-    password?: string;
-    avatar?: string;
-    created_at: Date;
-    updated_at?: Date;
+declare global {
+    namespace Express {
+        interface Request {
+            user?: IUser;
+        }
+    }
 }
 
+export * from "./index";
