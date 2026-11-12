@@ -1,32 +1,45 @@
 import express, { Application, Request, Response } from "express";
-import cors from 'cors';
-import dotenv from 'dotenv';
+import cors from "cors";
+import dotenv from "dotenv";
+import path from "path";
 import { connectDB } from "./config/db";
+import { setupSwagger } from "./config/swagger";
 
 import AuthRouter from "./modules/auth.route";
+import UserRouter from "./modules/user.route";
+import SongRouter from "./modules/song.route";
+import DeckRouter from "./modules/deck.route";
+import StudyRouter from "./modules/study.route";
 
 dotenv.config();
 
 const app: Application = express();
 
-app.use(express.static('public'));
+app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 app.use(cors());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
+// Setup Swagger API Documentation on /api/docs
+setupSwagger(app);
+
 const PORT = process.env.PORT || 5000;
 
 connectDB().then(() => {
-    
-    app.use('/api/auth', AuthRouter);
+    app.use("/api/auth", AuthRouter);
+    app.use("/api/users", UserRouter);
+    app.use("/api/songs", SongRouter);
+    app.use("/api/decks", DeckRouter);
+    app.use("/api/study", StudyRouter);
 
-    app.get('/api/health', (req: Request, res: Response) => {
+    app.get("/api/health", (req: Request, res: Response) => {
         return res.status(200).json({
             message: "Application running well"
         });
     });
-    
+
     app.listen(PORT, () => {
         console.log(`[Server]: Application running on http://127.0.0.1:${PORT}`);
+        console.log(`[Server]: Swagger Docs available at http://127.0.0.1:${PORT}/api/docs`);
     });
 });
