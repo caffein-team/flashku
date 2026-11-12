@@ -10,8 +10,8 @@ export const swaggerSpec = {
     },
     servers: [
         {
-            url: "http://127.0.0.1:5000",
-            description: "Local Development Server"
+            url: "/",
+            description: "Current Server (Auto Detect / Tunnel Friendly)"
         }
     ],
     components: {

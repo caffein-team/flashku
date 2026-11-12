@@ -1,4 +1,5 @@
 .env
+.agy
 node_modules/*
 dist/
 prototype/

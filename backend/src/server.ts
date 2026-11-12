@@ -15,8 +15,14 @@ dotenv.config();
 
 const app: Application = express();
 
+app.set("trust proxy", 1);
+app.use(cors({
+    origin: true,
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"]
+}));
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
-app.use(cors());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
