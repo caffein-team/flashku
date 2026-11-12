@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { Image } from 'expo-image';
 import { useEffect } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, {
@@ -11,6 +12,7 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import { songProgress, songStatus, type Song } from '@/features/songs/SongsProvider';
+import { youtubeThumbnail } from '@/features/songs/thumbnail';
 import { font } from '@/theme/fonts';
 import { useTheme } from '@/theme/ThemeProvider';
 
@@ -21,11 +23,13 @@ type Props = {
   expanded: boolean;
   playing: boolean;
   onTogglePlay: () => void;
+  /** Buka sesi flashcard lagu ini. */
+  onOpen: () => void;
 };
 
 const EASE = Easing.out(Easing.cubic);
 
-export function SongCard({ song, index, expanded, playing, onTogglePlay }: Props) {
+export function SongCard({ song, index, expanded, playing, onTogglePlay, onOpen }: Props) {
   const { colors } = useTheme();
   const progress = songProgress(song);
   const status = songStatus(song);
@@ -50,13 +54,12 @@ export function SongCard({ song, index, expanded, playing, onTogglePlay }: Props
     play.value = withTiming(isPlaying ? 1 : 0, { duration: 220 });
   }, [isPlaying, play]);
 
-  const noteStyle = useAnimatedStyle(() => ({ opacity: 1 - exp.value }));
+  // Scrim gelap tipis saat mode pencarian supaya tombol play terbaca di atas gambar.
+  const scrimStyle = useAnimatedStyle(() => ({ opacity: exp.value * 0.28 }));
+  const playingTint = useAnimatedStyle(() => ({ opacity: play.value * 0.85 }));
   const playBtnStyle = useAnimatedStyle(() => ({
     opacity: exp.value,
     transform: [{ scale: 0.7 + 0.3 * exp.value }],
-  }));
-  const thumbStyle = useAnimatedStyle(() => ({
-    backgroundColor: interpolateColor(play.value, [0, 1], [colors.banner, colors.primary]),
   }));
   const cardStyle = useAnimatedStyle(() => ({
     borderColor: interpolateColor(play.value, [0, 1], ['transparent', colors.primary]),
@@ -76,15 +79,26 @@ export function SongCard({ song, index, expanded, playing, onTogglePlay }: Props
       style={[styles.card, { backgroundColor: colors.surface }, cardStyle]}
     >
       <Pressable
-        onPress={onTogglePlay}
-        disabled={!expanded}
+        onPress={expanded ? onTogglePlay : onOpen}
         accessibilityRole="button"
-        accessibilityLabel={isPlaying ? 'Jeda lagu' : 'Putar lagu'}
+        accessibilityLabel={expanded ? (isPlaying ? 'Jeda lagu' : 'Putar lagu') : `Pelajari ${song.title}`}
       >
-        <Animated.View style={[styles.thumb, thumbStyle]}>
-          <Animated.View style={[styles.thumbIcon, noteStyle]}>
+        <View style={[styles.thumb, { backgroundColor: colors.banner }]}>
+          <View style={styles.thumbIcon}>
             <Ionicons name="musical-notes-outline" size={30} color={colors.link} />
-          </Animated.View>
+          </View>
+          <Image
+            source={{ uri: youtubeThumbnail(song.id) }}
+            style={StyleSheet.absoluteFill}
+            contentFit="cover"
+            transition={200}
+            accessibilityIgnoresInvertColors
+          />
+          <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: '#000' }, scrimStyle]} />
+          <Animated.View
+            pointerEvents="none"
+            style={[StyleSheet.absoluteFill, { backgroundColor: colors.primary }, playingTint]}
+          />
           <Animated.View style={[styles.thumbIcon, playBtnStyle]}>
             <View style={styles.playCircle}>
               <Ionicons name={isPlaying ? 'pause' : 'play'} size={18} color={colors.primary} />
@@ -95,10 +109,10 @@ export function SongCard({ song, index, expanded, playing, onTogglePlay }: Props
               <Text style={styles.durationText}>{song.duration}</Text>
             </View>
           )}
-        </Animated.View>
+        </View>
       </Pressable>
 
-      <View style={styles.info}>
+      <Pressable style={styles.info} onPress={onOpen} accessibilityRole="button" accessibilityLabel={`Pelajari ${song.title}`}>
         <Text style={[styles.title, { color: colors.text }]} numberOfLines={1}>
           {song.title}
         </Text>
@@ -130,7 +144,7 @@ export function SongCard({ song, index, expanded, playing, onTogglePlay }: Props
             </Animated.View>
           )}
         </View>
-      </View>
+      </Pressable>
     </Animated.View>
   );
 }
@@ -166,7 +180,7 @@ const styles = StyleSheet.create({
   },
   durationText: { color: '#fff', fontFamily: font.bold, fontSize: 11 },
   info: { flex: 1, gap: 4 },
-  title: { fontFamily: font.bold, fontSize: 15.5 },
+  title: { fontFamily: font.bold, fontWeight: '700', fontSize: 15.5 },
   artistRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   artist: { fontFamily: font.regular, fontSize: 13.5, flexShrink: 1 },
   nowPlaying: { flexDirection: 'row', alignItems: 'center', gap: 4 },

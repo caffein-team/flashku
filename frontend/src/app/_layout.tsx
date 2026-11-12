@@ -34,6 +34,7 @@ function RootStack() {
         <Stack.Protected guard={signedIn}>
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="add-song" options={{ animation: 'slide_from_bottom' }} />
+          <Stack.Screen name="study/[id]" options={{ animation: 'slide_from_bottom' }} />
         </Stack.Protected>
         <Stack.Protected guard={!signedIn}>
           <Stack.Screen name="(auth)" />

@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
+import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
@@ -9,6 +10,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Button } from '@/components/Button';
 import { useSongs } from '@/features/songs/SongsProvider';
+import { youtubeThumbnail } from '@/features/songs/thumbnail';
 import { fetchYouTubeInfo, parseYouTubeId } from '@/features/songs/youtube';
 import { font } from '@/theme/fonts';
 import { useTheme } from '@/theme/ThemeProvider';
@@ -125,6 +127,9 @@ export default function AddSongScreen() {
           >
             <View style={[styles.thumb, { backgroundColor: colors.banner }]}>
               <Ionicons name="musical-notes-outline" size={30} color={colors.link} />
+              {!!videoId && (
+                <Image source={{ uri: youtubeThumbnail(videoId) }} style={StyleSheet.absoluteFill} contentFit="cover" />
+              )}
             </View>
             <View style={styles.flex}>
               <Text style={[styles.previewTitle, { color: colors.text }]} numberOfLines={2}>
@@ -179,7 +184,7 @@ const styles = StyleSheet.create({
   status: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 },
   statusText: { fontFamily: font.medium, fontSize: 13 },
   preview: { flexDirection: 'row', alignItems: 'center', gap: 14, padding: 12, borderRadius: 20, borderWidth: 1, marginTop: 16 },
-  thumb: { width: 100, height: 76, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  thumb: { width: 100, height: 76, borderRadius: 14, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   previewTitle: { fontFamily: font.bold, fontSize: 15.5 },
   previewArtist: { fontFamily: font.regular, fontSize: 13.5, marginTop: 2 },
   how: { marginTop: 28, marginBottom: 14 },

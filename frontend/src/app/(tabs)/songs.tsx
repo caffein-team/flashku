@@ -154,6 +154,7 @@ export default function SongsScreen() {
             expanded={searching}
             playing={playingId === item.id}
             onTogglePlay={() => setPlayingId((cur) => (cur === item.id ? null : item.id))}
+            onOpen={() => router.push(`/study/${item.id}` as Href)}
           />
         )}
         ListEmptyComponent={
