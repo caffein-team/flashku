@@ -1,18 +1,5 @@
 import dotenv from "dotenv";
-import { fetch as undiciFetch, ProxyAgent } from "undici";
 dotenv.config();
-
-function getGeminiDispatcher() {
-    const proxyUrl = process.env.GEMINI_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
-    if (proxyUrl) {
-        try {
-            return new ProxyAgent(proxyUrl.trim());
-        } catch (e: any) {
-            console.warn(`[Gemini Proxy Warning] Failed to initialize ProxyAgent (${proxyUrl}): ${e.message}`);
-        }
-    }
-    return undefined;
-}
 
 export interface GeminiQuotaStatus {
     is_configured: boolean;
@@ -21,6 +8,7 @@ export interface GeminiQuotaStatus {
     model: string;
     message: string;
     checked_at: string;
+    provider?: "groq" | "gemini" | "unknown";
 }
 
 export interface GeminiEnrichResult {
@@ -28,44 +16,137 @@ export interface GeminiEnrichResult {
     vocabulary_meanings: Record<string, string>;
 }
 
+function getAiConfig() {
+    const groqKey = (process.env.GROQ_API_KEY || process.env.GROK_API_KEY || "").replace(/^"|"$/g, "").trim();
+    const geminiKey = (process.env.GEMINI_API_KEY || "").replace(/^"|"$/g, "").trim();
+
+    if (groqKey) {
+        return {
+            provider: "groq" as const,
+            apiKey: groqKey,
+            model: process.env.GROQ_MODEL || process.env.GROK_MODEL || "llama-3.3-70b-versatile",
+            baseUrl: (process.env.GROQ_BASE_URL || process.env.GROK_BASE_URL || "https://api.groq.com/openai/v1").replace(/\/+$/, ""),
+        };
+    }
+
+    return {
+        provider: "gemini" as const,
+        apiKey: geminiKey,
+        model: process.env.GEMINI_MODEL || "gemini-flash-latest",
+        baseUrl: (process.env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta").replace(/\/+$/, ""),
+    };
+}
+
 export async function checkGeminiQuotaStatus(): Promise<GeminiQuotaStatus> {
-    const rawKey = process.env.GEMINI_API_KEY || "";
-    const apiKey = rawKey.replace(/^"|"$/g, "").trim();
-    const model = process.env.GEMINI_MODEL || "gemini-flash-latest";
+    const config = getAiConfig();
     const nowIso = new Date().toISOString();
 
-    if (!apiKey) {
+    if (!config.apiKey) {
         return {
             is_configured: false,
             is_available: false,
             status: "not_configured",
-            model: model,
-            message: "GEMINI_API_KEY belum dikonfigurasi di file .env. Masukkan API key dari Google AI Studio.",
+            model: config.model,
+            provider: config.provider,
+            message: "GROQ_API_KEY (atau GEMINI_API_KEY) belum dikonfigurasi di file .env.",
             checked_at: nowIso
         };
     }
 
-    const baseUrl = (process.env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta").replace(/\/+$/, "");
-    const testUrl = `${baseUrl}/models?key=${apiKey}`;
+    if (config.provider === "groq") {
+        const testUrl = `${config.baseUrl}/models`;
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 8000);
 
+            const response = await fetch(testUrl, {
+                method: "GET",
+                headers: {
+                    "Authorization": `Bearer ${config.apiKey}`,
+                    "User-Agent": "FlashkuApp/1.0"
+                },
+                signal: controller.signal
+            });
+            clearTimeout(timeout);
+
+            if (response.ok) {
+                return {
+                    is_configured: true,
+                    is_available: true,
+                    status: "available",
+                    model: config.model,
+                    provider: "groq",
+                    message: "Groq AI API key aktif dan siap digunakan (Llama 3.3 70B).",
+                    checked_at: nowIso
+                };
+            }
+
+            const statusCode = response.status;
+            let errMessage = "";
+            try {
+                const errData: any = await response.json();
+                errMessage = errData?.error?.message || response.statusText;
+            } catch {
+                errMessage = response.statusText;
+            }
+
+            if (statusCode === 401 || statusCode === 403) {
+                return {
+                    is_configured: true,
+                    is_available: false,
+                    status: "invalid_key",
+                    model: config.model,
+                    provider: "groq",
+                    message: `Groq API Key tidak valid (HTTP ${statusCode}). Periksa kembali GROQ_API_KEY di .env.`,
+                    checked_at: nowIso
+                };
+            } else if (statusCode === 429) {
+                return {
+                    is_configured: true,
+                    is_available: false,
+                    status: "quota_exceeded",
+                    model: config.model,
+                    provider: "groq",
+                    message: `Batas kuota / rate limit Groq terlampaui (HTTP 429). ${errMessage}`,
+                    checked_at: nowIso
+                };
+            } else {
+                return {
+                    is_configured: true,
+                    is_available: false,
+                    status: "error",
+                    model: config.model,
+                    provider: "groq",
+                    message: `Groq API mengembalikan HTTP ${statusCode}: ${errMessage}`,
+                    checked_at: nowIso
+                };
+            }
+        } catch (err: any) {
+            return {
+                is_configured: true,
+                is_available: false,
+                status: "network_error",
+                model: config.model,
+                provider: "groq",
+                message: `Koneksi jaringan ke Groq API gagal: ${err.message || err}`,
+                checked_at: nowIso
+            };
+        }
+    }
+
+    // Fallback: Gemini API check
+    const testUrl = `${config.baseUrl}/models?key=${config.apiKey}`;
     try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 8000);
 
-        const dispatcher = getGeminiDispatcher();
-        const fetchOptions: any = {
+        const response = await fetch(testUrl, {
             method: "GET",
             headers: {
                 "User-Agent": "FlashkuApp/1.0"
             },
             signal: controller.signal
-        };
-        if (dispatcher) {
-            fetchOptions.dispatcher = dispatcher;
-        }
-
-        const response = await undiciFetch(testUrl, fetchOptions);
-
+        });
         clearTimeout(timeout);
 
         if (response.ok) {
@@ -73,7 +154,8 @@ export async function checkGeminiQuotaStatus(): Promise<GeminiQuotaStatus> {
                 is_configured: true,
                 is_available: true,
                 status: "available",
-                model: model,
+                model: config.model,
+                provider: "gemini",
                 message: "Gemini API key aktif dan kuota tersedia.",
                 checked_at: nowIso
             };
@@ -88,42 +170,23 @@ export async function checkGeminiQuotaStatus(): Promise<GeminiQuotaStatus> {
             errMessage = response.statusText;
         }
 
-        if (statusCode === 429) {
-            return {
-                is_configured: true,
-                is_available: false,
-                status: "quota_exceeded",
-                model: model,
-                message: `Kuota Gemini API telah mencapai batas limit (HTTP 429). ${errMessage}`,
-                checked_at: nowIso
-            };
-        } else if (statusCode === 400 || statusCode === 403) {
-            return {
-                is_configured: true,
-                is_available: false,
-                status: "invalid_key",
-                model: model,
-                message: `API key tidak valid atau tidak memiliki izin akses (HTTP ${statusCode}). ${errMessage}`,
-                checked_at: nowIso
-            };
-        } else {
-            return {
-                is_configured: true,
-                is_available: false,
-                status: "error",
-                model: model,
-                message: `Gemini API mengembalikan HTTP ${statusCode}: ${errMessage}`,
-                checked_at: nowIso
-            };
-        }
+        return {
+            is_configured: true,
+            is_available: false,
+            status: statusCode === 429 ? "quota_exceeded" : (statusCode === 400 || statusCode === 403 ? "invalid_key" : "error"),
+            model: config.model,
+            provider: "gemini",
+            message: `Gemini API HTTP ${statusCode}: ${errMessage}`,
+            checked_at: nowIso
+        };
     } catch (err: any) {
-        const causeMsg = err.cause ? ` (${err.cause.message || err.cause})` : "";
         return {
             is_configured: true,
             is_available: false,
             status: "network_error",
-            model: model,
-            message: `Koneksi jaringan ke Gemini API gagal: ${err.message || err}${causeMsg}`,
+            model: config.model,
+            provider: "gemini",
+            message: `Koneksi jaringan ke Gemini API gagal: ${err.message || err}`,
             checked_at: nowIso
         };
     }
@@ -133,11 +196,9 @@ export async function enrichBatchWithGemini(
     batchRows: { id: string | number; raw_text: string }[],
     targetLanguage: string = "Indonesian"
 ): Promise<GeminiEnrichResult> {
-    const rawKey = process.env.GEMINI_API_KEY || "";
-    const apiKey = rawKey.replace(/^"|"$/g, "").trim();
-    const model = process.env.GEMINI_MODEL || "gemini-flash-latest";
+    const config = getAiConfig();
 
-    if (!apiKey || !batchRows || batchRows.length === 0) {
+    if (!config.apiKey || !batchRows || batchRows.length === 0) {
         return { row_translations: {}, vocabulary_meanings: {} };
     }
 
@@ -165,6 +226,86 @@ export async function enrichBatchWithGemini(
         `  }\n` +
         `}`;
 
+    // 1. Groq / OpenAI-compatible flow (Primary)
+    if (config.provider === "groq") {
+        const apiUrl = `${config.baseUrl}/chat/completions`;
+        const requestPayload = {
+            model: config.model,
+            messages: [
+                { role: "system", content: systemInstruction },
+                { role: "user", content: "Lines:\n" + JSON.stringify(indexedLines) }
+            ],
+            response_format: { type: "json_object" },
+            temperature: 0.2
+        };
+
+        for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 35000);
+
+                const response = await fetch(apiUrl, {
+                    method: "POST",
+                    headers: {
+                        "Authorization": `Bearer ${config.apiKey}`,
+                        "Content-Type": "application/json",
+                        "User-Agent": "FlashkuApp/1.0"
+                    },
+                    body: JSON.stringify(requestPayload),
+                    signal: controller.signal
+                });
+                clearTimeout(timeout);
+
+                if (!response.ok) {
+                    const errText = await response.text();
+                    console.error(`[Groq AI Error]: HTTP ${response.status} - ${errText.substring(0, 150)}`);
+                    if (response.status === 429 && attempt === 0) {
+                        await new Promise((r) => setTimeout(r, 2000));
+                        continue;
+                    }
+                    break;
+                }
+
+                const data: any = await response.json();
+                const content = data?.choices?.[0]?.message?.content || "";
+                let cleanText = content.trim();
+                if (cleanText.startsWith("```json")) cleanText = cleanText.substring(7);
+                else if (cleanText.startsWith("```")) cleanText = cleanText.substring(3);
+                if (cleanText.endsWith("```")) cleanText = cleanText.substring(0, cleanText.length - 3);
+
+                const parsed = JSON.parse(cleanText.trim());
+                const rowTranslations: Record<string, string> = {};
+
+                if (Array.isArray(parsed.lines)) {
+                    for (const item of parsed.lines) {
+                        const rowId = idxToRowId.get(item.index);
+                        if (rowId !== undefined) {
+                            rowTranslations[String(rowId)] = item.translation || "";
+                        }
+                    }
+                }
+
+                const vocabularyMeanings: Record<string, string> =
+                    parsed.vocabulary && typeof parsed.vocabulary === "object" ? parsed.vocabulary : {};
+
+                return {
+                    row_translations: rowTranslations,
+                    vocabulary_meanings: vocabularyMeanings
+                };
+            } catch (err: any) {
+                if (attempt === 0) {
+                    await new Promise((r) => setTimeout(r, 2000));
+                    continue;
+                }
+                console.error("[Groq AI Exception]:", err.message || err);
+                break;
+            }
+        }
+
+        return { row_translations: {}, vocabulary_meanings: {} };
+    }
+
+    // 2. Gemini fallback flow
     const requestPayload = {
         contents: [
             {
@@ -180,16 +321,14 @@ export async function enrichBatchWithGemini(
         }
     };
 
-    const baseUrl = (process.env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta").replace(/\/+$/, "");
-    const apiUrl = `${baseUrl}/models/${model}:generateContent?key=${apiKey}`;
+    const apiUrl = `${config.baseUrl}/models/${config.model}:generateContent?key=${config.apiKey}`;
 
     for (let attempt = 0; attempt < 2; attempt++) {
         try {
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), 35000);
 
-            const dispatcher = getGeminiDispatcher();
-            const fetchOptions: any = {
+            const response = await fetch(apiUrl, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -197,47 +336,28 @@ export async function enrichBatchWithGemini(
                 },
                 body: JSON.stringify(requestPayload),
                 signal: controller.signal
-            };
-            if (dispatcher) {
-                fetchOptions.dispatcher = dispatcher;
-            }
-
-            const response = await undiciFetch(apiUrl, fetchOptions);
-
+            });
             clearTimeout(timeout);
 
             if (!response.ok) {
-                if (response.status === 503 && attempt === 0) {
-                    await new Promise((resolve) => setTimeout(resolve, 2000));
-                    continue;
-                }
                 const errText = await response.text();
-                console.error(`[Gemini Enrichment Error]: HTTP ${response.status} - ${errText.substring(0, 150)}`);
+                console.error(`[Gemini AI Error]: HTTP ${response.status} - ${errText.substring(0, 150)}`);
                 break;
             }
 
             const data: any = await response.json();
-            const candidate = data?.candidates?.[0];
-            const textContent = candidate?.content?.parts?.[0]?.text || "";
-
+            const textContent = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
             let cleanText = textContent.trim();
-            if (cleanText.startsWith("```json")) {
-                cleanText = cleanText.substring(7);
-            } else if (cleanText.startsWith("```")) {
-                cleanText = cleanText.substring(3);
-            }
-            if (cleanText.endsWith("```")) {
-                cleanText = cleanText.substring(0, cleanText.length - 3);
-            }
-            cleanText = cleanText.trim();
+            if (cleanText.startsWith("```json")) cleanText = cleanText.substring(7);
+            else if (cleanText.startsWith("```")) cleanText = cleanText.substring(3);
+            if (cleanText.endsWith("```")) cleanText = cleanText.substring(0, cleanText.length - 3);
 
-            const parsed = JSON.parse(cleanText);
+            const parsed = JSON.parse(cleanText.trim());
             const rowTranslations: Record<string, string> = {};
 
             if (Array.isArray(parsed.lines)) {
                 for (const item of parsed.lines) {
-                    const lineIdx = item.index;
-                    const rowId = idxToRowId.get(lineIdx);
+                    const rowId = idxToRowId.get(item.index);
                     if (rowId !== undefined) {
                         rowTranslations[String(rowId)] = item.translation || "";
                     }
@@ -252,11 +372,7 @@ export async function enrichBatchWithGemini(
                 vocabulary_meanings: vocabularyMeanings
             };
         } catch (err: any) {
-            if (attempt === 0) {
-                await new Promise((resolve) => setTimeout(resolve, 2000));
-                continue;
-            }
-            console.error("[Gemini Enrichment Exception]:", err.message || err);
+            console.error("[Gemini AI Exception]:", err.message || err);
             break;
         }
     }
