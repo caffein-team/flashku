@@ -585,30 +585,10 @@ export function setupSwagger(app: Application) {
         next();
     });
 
-    app.use("/api/docs", swaggerUi.serve, (req: Request, res: Response, next: NextFunction) => {
-        const proto = (req.headers["x-forwarded-proto"] as string) || req.protocol || "http";
-        const host = req.get("host") || "127.0.0.1:5000";
-        const currentOrigin = `${proto}://${host}`;
-
-        const dynamicSpec = {
-            ...swaggerSpec,
-            servers: [
-                {
-                    url: currentOrigin,
-                    description: `Active Server (${currentOrigin})`
-                },
-                {
-                    url: "/",
-                    description: "Relative Path (/)"
-                }
-            ]
-        };
-
-        return swaggerUi.setup(dynamicSpec, {
-            customSiteTitle: "Flashku API Docs - Swagger UI",
-            swaggerOptions: {
-                persistAuthorization: true
-            }
-        })(req, res, next);
-    });
+    app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+        customSiteTitle: "Flashku API Docs - Swagger UI",
+        swaggerOptions: {
+            persistAuthorization: true
+        }
+    }));
 }
