@@ -609,10 +609,22 @@ export function setupSwagger(app: Application) {
         next();
     });
 
-    app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+    const swaggerUiHandler = swaggerUi.setup(swaggerSpec, {
         customSiteTitle: "Flashku API Docs - Swagger UI",
         swaggerOptions: {
             persistAuthorization: true
         }
-    }));
+    });
+
+    app.use("/api/docs", swaggerUi.serve, (req: Request, res: Response, next: NextFunction) => {
+        const originalSend = res.send.bind(res);
+        res.send = (body: any) => {
+            if (typeof body === "string" && body.includes("swagger-ui-init.js")) {
+                const cacheBuster = Date.now();
+                body = body.replace('src="./swagger-ui-init.js"', `src="./swagger-ui-init.js?v=${cacheBuster}"`);
+            }
+            return originalSend(body);
+        };
+        return swaggerUiHandler(req, res, next);
+    });
 }
