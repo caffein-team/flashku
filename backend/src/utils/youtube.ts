@@ -88,10 +88,20 @@ export async function ensureYtDlpBinary(): Promise<string> {
     return targetPath;
 }
 
-function findCookieFile(): string | null {
+export function findCookieFile(): string | null {
+    // 1. Explicit path in env
     if (process.env.YOUTUBE_COOKIE_FILE && fs.existsSync(process.env.YOUTUBE_COOKIE_FILE)) {
-        return process.env.YOUTUBE_COOKIE_FILE;
+        try {
+            const stat = fs.statSync(process.env.YOUTUBE_COOKIE_FILE);
+            if (stat.size > 20) {
+                return process.env.YOUTUBE_COOKIE_FILE;
+            }
+        } catch {
+            // ignore
+        }
     }
+
+    // 2. Candidate files on disk
     const candidates = [
         path.resolve(process.cwd(), "cookies.txt"),
         path.resolve(process.cwd(), "../cookies.txt"),
@@ -99,22 +109,62 @@ function findCookieFile(): string | null {
     ];
     for (const candidate of candidates) {
         if (fs.existsSync(candidate)) {
-            return candidate;
+            try {
+                const stat = fs.statSync(candidate);
+                if (stat.size > 20) {
+                    return candidate;
+                }
+            } catch {
+                // ignore
+            }
         }
     }
 
+    // 3. Base64 encoded cookies in env
     if (process.env.YOUTUBE_COOKIES_BASE64) {
         try {
-            const decoded = Buffer.from(process.env.YOUTUBE_COOKIES_BASE64, "base64").toString("utf-8");
-            const target = path.resolve(process.cwd(), "cookies.txt");
-            fs.writeFileSync(target, decoded, "utf-8");
-            return target;
-        } catch {
-            // ignore
+            const decoded = Buffer.from(process.env.YOUTUBE_COOKIES_BASE64.trim(), "base64").toString("utf-8");
+            if (decoded.length > 20) {
+                const target = path.resolve(process.cwd(), "cookies.txt");
+                fs.writeFileSync(target, decoded, "utf-8");
+                return target;
+            }
+        } catch (e: any) {
+            console.warn(`[YouTube Extractor] Failed to decode YOUTUBE_COOKIES_BASE64: ${e.message}`);
+        }
+    }
+
+    // 4. Raw text cookies in env
+    if (process.env.YOUTUBE_COOKIES_TEXT) {
+        try {
+            const text = process.env.YOUTUBE_COOKIES_TEXT.trim();
+            if (text.length > 20) {
+                const target = path.resolve(process.cwd(), "cookies.txt");
+                fs.writeFileSync(target, text, "utf-8");
+                return target;
+            }
+        } catch (e: any) {
+            console.warn(`[YouTube Extractor] Failed to write YOUTUBE_COOKIES_TEXT: ${e.message}`);
         }
     }
 
     return null;
+}
+
+function buildBaseYtDlpArgs(cookieFile: string | null): string[] {
+    const args: string[] = [
+        "-4", // Force IPv4
+        "--no-warnings",
+        "--remote-components", "ejs:github",
+        "--js-runtimes", `node:${process.execPath}`,
+        "--user-agent", process.env.YOUTUBE_USER_AGENT || "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+    ];
+
+    if (cookieFile) {
+        args.push("--cookies", cookieFile);
+    }
+
+    return args;
 }
 
 export async function downloadThumbnail(
@@ -177,12 +227,17 @@ async function extractAudioWithYtDlp(
 
     const binary = await ensureYtDlpBinary();
     const outputTemplate = path.resolve(outputDir, `${youtubeId}.%(ext)s`);
+    const cookieFile = findCookieFile();
+
+    if (cookieFile) {
+        console.log(`[YouTube Extractor] Using cookies from: ${cookieFile} (Size: ${fs.statSync(cookieFile).size} bytes)`);
+    } else {
+        console.log(`[YouTube Extractor] No cookies detected. Running in anonymous mode (Cloud Datacenter IPs may be blocked).`);
+    }
 
     const args: string[] = [
-        "-4", // Force IPv4 to avoid blacklisted datacenter IPv6 blocks
-        "--no-warnings",
+        ...buildBaseYtDlpArgs(cookieFile),
         "--no-progress",
-        "--js-runtimes", `node:${process.execPath}`,
         "-x",
         "--audio-format", "mp3",
         "--audio-quality", "192K",
@@ -190,12 +245,6 @@ async function extractAudioWithYtDlp(
 
     if (ffmpegStatic) {
         args.push("--ffmpeg-location", ffmpegStatic);
-    }
-
-    // Automatically detect cookies.txt or YOUTUBE_COOKIE_FILE
-    const cookieFile = findCookieFile();
-    if (cookieFile) {
-        args.push("--cookies", cookieFile);
     }
 
     args.push("-o", outputTemplate, `https://www.youtube.com/watch?v=${youtubeId}`);
@@ -220,10 +269,17 @@ async function extractAudioWithYtDlp(
                     stderr.includes("UNPLAYABLE");
 
                 if (isBlocked) {
-                    reject(new Error(
-                        "YouTube memblokir unduhan (Anti-Bot / IP / Sign-In Check: 'The page needs to be reloaded'). " +
-                        "Solusi: Pasang file 'cookies.txt' akun YouTube Anda di root direktori backend (atau set YOUTUBE_COOKIE_FILE di .env)."
-                    ));
+                    if (cookieFile) {
+                        reject(new Error(
+                            "YouTube menolak akses: Cookie di 'cookies.txt' mungkin sudah kedaluwarsa atau tidak lengkap. " +
+                            "Solusi: Ekspor ulang cookies dari browser Anda saat sedang login ke YouTube lalu ganti isi cookies.txt."
+                        ));
+                    } else {
+                        reject(new Error(
+                            "YouTube memblokir IP Datacenter VPS (Anti-Bot Check: 'Sign in to confirm you're not a bot'). " +
+                            "Solusi: Pasang file 'cookies.txt' akun YouTube Anda di root direktori backend VPS (atau set YOUTUBE_COOKIE_FILE / YOUTUBE_COOKIES_BASE64 di .env)."
+                        ));
+                    }
                 } else {
                     reject(new Error(`yt-dlp failed (code ${code}): ${stderr.slice(-300)}`));
                 }
@@ -236,125 +292,11 @@ async function extractAudioWithYtDlp(
     });
 }
 
-export function findPythonExecutable(): string {
-    if (process.env.PYTHON_PATH && fs.existsSync(process.env.PYTHON_PATH)) {
-        return process.env.PYTHON_PATH;
-    }
-
-    const isWin = process.platform === "win32";
-    const venvPythonCandidates = isWin
-        ? [
-            path.resolve(process.cwd(), ".venv/Scripts/python.exe"),
-            path.resolve(process.cwd(), "venv/Scripts/python.exe"),
-            path.resolve(process.cwd(), "../.venv/Scripts/python.exe"),
-            path.resolve(process.cwd(), "prototype/.venv/Scripts/python.exe"),
-        ]
-        : [
-            path.resolve(process.cwd(), ".venv/bin/python"),
-            path.resolve(process.cwd(), ".venv/bin/python3"),
-            path.resolve(process.cwd(), "venv/bin/python"),
-            path.resolve(process.cwd(), "venv/bin/python3"),
-            path.resolve(process.cwd(), "../.venv/bin/python"),
-            path.resolve(process.cwd(), "prototype/.venv/bin/python"),
-            "/usr/bin/python3",
-            "/usr/local/bin/python3",
-        ];
-
-    for (const cand of venvPythonCandidates) {
-        if (fs.existsSync(cand)) {
-            return cand;
-        }
-    }
-
-    return isWin ? "python" : "python3";
-}
-
-export async function extractWithPython(
-    youtubeId: string,
-    outputDir: string,
-    thumbnailsDir: string
-): Promise<YouTubeMetadata> {
-    const pythonExe = findPythonExecutable();
-    const scriptPath = path.resolve(process.cwd(), "scripts/extract_youtube.py");
-
-    if (!fs.existsSync(scriptPath)) {
-        throw new Error(`Python script not found at ${scriptPath}`);
-    }
-
-    const args = [
-        scriptPath,
-        youtubeId,
-        "--output-dir", outputDir,
-        "--thumbnails-dir", thumbnailsDir,
-    ];
-
-    if (ffmpegStatic) {
-        args.push("--ffmpeg-location", ffmpegStatic);
-    }
-
-    const cookieFile = findCookieFile();
-    if (cookieFile) {
-        args.push("--cookies", cookieFile);
-    }
-
-    return new Promise((resolve, reject) => {
-        const proc = spawn(pythonExe, args, {
-            stdio: ["ignore", "pipe", "pipe"],
-            env: { ...process.env, PYTHONUNBUFFERED: "1" }
-        });
-
-        let stdout = "";
-        let stderr = "";
-
-        proc.stdout.on("data", (chunk) => {
-            stdout += chunk.toString();
-        });
-
-        proc.stderr.on("data", (chunk) => {
-            stderr += chunk.toString();
-        });
-
-        proc.on("close", (code) => {
-            const jsonMatch = stdout.match(/\{"success":\s*(true|false)[\s\S]*\}/);
-            if (jsonMatch) {
-                try {
-                    const parsed = JSON.parse(jsonMatch[0]);
-                    if (parsed.success && parsed.data) {
-                        return resolve(parsed.data);
-                    }
-                    if (parsed.success === false && parsed.error) {
-                        return reject(new Error(parsed.error));
-                    }
-                } catch {
-                    // Ignore parse error and fall through
-                }
-            }
-
-            const errMsg = stderr || stdout || `Python exited with code ${code}`;
-            reject(new Error(`Python extraction failed: ${errMsg.slice(-300)}`));
-        });
-
-        proc.on("error", (err) => {
-            reject(new Error(`Failed to start Python process (${pythonExe}): ${err.message}`));
-        });
-    });
-}
-
 export async function fetchYouTubeData(youtubeId: string): Promise<YouTubeMetadata> {
     const outputDir = path.resolve(process.cwd(), "uploads/songs");
     const thumbnailsDir = path.resolve(process.cwd(), "uploads/thumbnails");
     fs.mkdirSync(outputDir, { recursive: true });
     fs.mkdirSync(thumbnailsDir, { recursive: true });
-
-    // 1. Primary method: Dedicated Python extractor script
-    try {
-        console.log(`[YouTube Extractor] Attempting extraction via Python script for ${youtubeId}...`);
-        const pythonResult = await extractWithPython(youtubeId, outputDir, thumbnailsDir);
-        console.log(`[YouTube Extractor] Python extraction succeeded for ${youtubeId}`);
-        return pythonResult;
-    } catch (pyErr: any) {
-        console.warn(`[YouTube Extractor] Python extractor failed (${pyErr.message}). Attempting standalone yt-dlp fallback...`);
-    }
 
     let title = "Unknown Title";
     let artist = "Unknown Artist";
@@ -375,25 +317,20 @@ export async function fetchYouTubeData(youtubeId: string): Promise<YouTubeMetada
             if (data.author_name) artist = data.author_name;
             if (data.thumbnail_url) rawThumbnail = data.thumbnail_url;
         }
-    } catch (e) {
+    } catch {
         // oEmbed fallback ignored
     }
 
     // 2. Fetch metadata & duration via standalone yt-dlp if duration not found
     try {
         const binary = await ensureYtDlpBinary();
+        const cookieFile = findCookieFile();
         const jsonArgs = [
-            "-4",
-            "--no-warnings",
+            ...buildBaseYtDlpArgs(cookieFile),
             "--dump-json",
             "--skip-download",
-            "--js-runtimes", `node:${process.execPath}`,
             `https://www.youtube.com/watch?v=${youtubeId}`
         ];
-        const cookieFile = findCookieFile();
-        if (cookieFile) {
-            jsonArgs.push("--cookies", cookieFile);
-        }
 
         const jsonOut = await new Promise<string>((resolve, reject) => {
             const proc = spawn(binary, jsonArgs);
