@@ -326,10 +326,10 @@ export const swaggerSpec = {
         "/api/songs/ai/quota": {
             get: {
                 tags: ["Songs"],
-                summary: "Check Google Gemini API quota, key configuration and live availability status",
+                summary: "Check AI API quota, key configuration and live availability status",
                 security: [{ BearerAuth: [] }],
                 responses: {
-                    200: { description: "Gemini API live quota status" }
+                    200: { description: "AI API live quota status" }
                 }
             }
         },
@@ -362,7 +362,7 @@ export const swaggerSpec = {
         "/api/songs/{id}/enrich-ai": {
             post: {
                 tags: ["Songs"],
-                summary: "Run or re-run Gemini AI to translate lyric lines and enrich phrase meanings in context",
+                summary: "Run or re-run AI to translate lyric lines and enrich phrase meanings in context",
                 security: [{ BearerAuth: [] }],
                 parameters: [
                     { name: "id", in: "path", required: true, schema: { type: "string" } },

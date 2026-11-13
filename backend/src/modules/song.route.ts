@@ -6,7 +6,7 @@ import { ILyricRow, ISong, IUserSong, SongImportBody, UpdateSongLyricsBody } fro
 import { cleanTrackAndArtist, fetchLrcLibLyrics, parseLrc, parsePlainLyrics } from "../utils/lyrics";
 import { extractYouTubeId, fetchYouTubeData } from "../utils/youtube";
 import { tokenizeJapaneseBatch } from "../utils/japanese";
-import { checkGeminiQuotaStatus, enrichBatchWithGemini } from "../utils/gemini";
+import { checkAiQuotaStatus, enrichBatchWithAi } from "../utils/ai";
 
 const SongRouter = express.Router();
 
@@ -318,18 +318,18 @@ SongRouter.get("/", async (req: Request, res: Response) => {
 
 /**
  * GET /api/songs/ai/quota
- * Check Google Gemini API quota, key configuration and live availability status.
+ * Check AI API quota, key configuration and live availability status.
  */
 SongRouter.get("/ai/quota", async (req: Request, res: Response) => {
     try {
-        const quotaStatus = await checkGeminiQuotaStatus();
+        const quotaStatus = await checkAiQuotaStatus();
         return res.status(200).json({
             status: "success",
-            message: "Gemini API quota status retrieved",
+            message: "AI API quota status retrieved",
             data: quotaStatus
         });
     } catch (err: unknown) {
-        console.error("[Gemini Quota Error]:", err);
+        console.error("[AI Quota Error]:", err);
         return res.status(500).json({
             status: "error",
             message: "Internal server error"
@@ -405,7 +405,7 @@ SongRouter.get("/:id", async (req: Request, res: Response) => {
 
 /**
  * POST /api/songs/:id/enrich-ai
- * Run or re-run Gemini AI to translate lyric lines and enrich phrase meanings in context.
+ * Run or re-run AI to translate lyric lines and enrich phrase meanings in context.
  */
 SongRouter.post("/:id/enrich-ai", async (req: Request, res: Response) => {
     try {
@@ -464,7 +464,7 @@ SongRouter.post("/:id/enrich-ai", async (req: Request, res: Response) => {
                 raw_text: r.raw_text
             }));
 
-            const result = await enrichBatchWithGemini(batchForAi, target_language);
+            const result = await enrichBatchWithAi(batchForAi, target_language);
             const rowTranslations = result.row_translations || {};
             const vocabMeanings = result.vocabulary_meanings || {};
 
