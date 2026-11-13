@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 dotenv.config();
 import Groq from "groq-sdk";
-import { ProxyAgent } from "undici";
+import { ProxyAgent, Socks5ProxyAgent, Dispatcher } from "undici";
 
 export interface AiQuotaStatus {
     is_configured: boolean;
@@ -34,10 +34,15 @@ function getAiConfig() {
 }
 
 function getGroqClient(apiKey: string, baseUrl?: string, proxyUrl?: string): Groq {
-    let dispatcher: ProxyAgent | undefined;
+    let dispatcher: Dispatcher | undefined;
     if (proxyUrl) {
         try {
-            dispatcher = new ProxyAgent(proxyUrl);
+            const cleanUrl = proxyUrl.trim();
+            if (cleanUrl.startsWith("socks5://") || cleanUrl.startsWith("socks5h://") || cleanUrl.startsWith("socks://")) {
+                dispatcher = new Socks5ProxyAgent(cleanUrl.replace(/^socks5h:\/\//, "socks5://"));
+            } else {
+                dispatcher = new ProxyAgent(cleanUrl);
+            }
         } catch (e: any) {
             console.warn(`[Groq Proxy Warning] Failed to initialize ProxyAgent (${proxyUrl}): ${e.message}`);
         }
