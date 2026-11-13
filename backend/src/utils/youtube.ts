@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { spawn } from "child_process";
-import { Ytdl } from "@distube/ytdl-core";
+import { Ytdl, Client } from "@distube/ytdl-core";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegStatic from "ffmpeg-static";
 
@@ -14,10 +14,22 @@ export interface YouTubeMetadata {
     audio_path: string;
 }
 
-const ytdl = new Ytdl();
-
 if (ffmpegStatic) {
     ffmpeg.setFfmpegPath(ffmpegStatic);
+}
+
+export function getYtdlInstance(): Ytdl {
+    const cookie = (process.env.YOUTUBE_COOKIE || process.env.YT_COOKIE || "").trim();
+    return new Ytdl({
+        clients: [
+            Client.Tv,
+            Client.Mweb,
+            Client.WebEmbedded,
+            Client.WebMusic,
+            Client.VisionOS
+        ],
+        cookie: cookie ? cookie : undefined
+    });
 }
 
 export function extractYouTubeId(urlOrId: string): string | null {
@@ -155,6 +167,7 @@ async function downloadAudioPureNode(
         return localStaticPath;
     }
 
+    const ytdl = getYtdlInstance();
     const stream = await ytdl.download(youtubeId, {
         filter: { hasAudio: true, hasVideo: false },
         quality: "highestaudio",
@@ -192,6 +205,8 @@ export async function fetchYouTubeData(youtubeId: string): Promise<YouTubeMetada
     let durationSeconds = 0;
     let rawThumbnail: string | undefined;
 
+    const ytdl = getYtdlInstance();
+
     try {
         const info = await ytdl.getInfo(youtubeId);
         title = info.videoDetails.title || "Unknown Title";
@@ -201,9 +216,21 @@ export async function fetchYouTubeData(youtubeId: string): Promise<YouTubeMetada
             rawThumbnail = info.videoDetails.thumbnails[info.videoDetails.thumbnails.length - 1].url;
         }
     } catch (infoErr: any) {
-        const ytDlpBin = findStandaloneYtDlpBinary();
-        if (!ytDlpBin) {
-            throw new Error(`Failed to fetch YouTube metadata: ${infoErr.message}`);
+        // Fallback: try dedicated fallback client if first pass threw bot/auth check
+        try {
+            const fallbackYtdl = new Ytdl({ clients: [Client.Tv] });
+            const info = await fallbackYtdl.getInfo(youtubeId);
+            title = info.videoDetails.title || "Unknown Title";
+            artist = info.videoDetails.author?.name || "Unknown Artist";
+            durationSeconds = Number(info.videoDetails.lengthSeconds) || 0;
+            if (info.videoDetails.thumbnails && info.videoDetails.thumbnails.length > 0) {
+                rawThumbnail = info.videoDetails.thumbnails[info.videoDetails.thumbnails.length - 1].url;
+            }
+        } catch {
+            const ytDlpBin = findStandaloneYtDlpBinary();
+            if (!ytDlpBin) {
+                throw new Error(`Failed to fetch YouTube metadata: ${infoErr.message}`);
+            }
         }
     }
 
