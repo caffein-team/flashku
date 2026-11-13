@@ -600,9 +600,12 @@ export const swaggerSpec = {
 
 export function setupSwagger(app: Application) {
     app.use("/api/docs", (req: Request, res: Response, next: NextFunction) => {
-        res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+        res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate, proxy-revalidate");
         res.setHeader("Pragma", "no-cache");
         res.setHeader("Expires", "0");
+        res.setHeader("Surrogate-Control", "no-store");
+        res.setHeader("CDN-Cache-Control", "no-store");
+        res.setHeader("Cloudflare-CDN-Cache-Control", "no-store");
         next();
     });
 
