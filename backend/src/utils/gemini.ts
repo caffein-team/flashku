@@ -1,5 +1,18 @@
 import dotenv from "dotenv";
+import { ProxyAgent } from "undici";
 dotenv.config();
+
+function getGeminiDispatcher() {
+    const proxyUrl = process.env.GEMINI_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
+    if (proxyUrl) {
+        try {
+            return new ProxyAgent(proxyUrl.trim());
+        } catch (e: any) {
+            console.warn(`[Gemini Proxy Warning] Failed to initialize ProxyAgent (${proxyUrl}): ${e.message}`);
+        }
+    }
+    return undefined;
+}
 
 export interface GeminiQuotaStatus {
     is_configured: boolean;
@@ -32,19 +45,26 @@ export async function checkGeminiQuotaStatus(): Promise<GeminiQuotaStatus> {
         };
     }
 
-    const testUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
+    const baseUrl = (process.env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta").replace(/\/+$/, "");
+    const testUrl = `${baseUrl}/models?key=${apiKey}`;
 
     try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 8000);
 
-        const response = await fetch(testUrl, {
+        const dispatcher = getGeminiDispatcher();
+        const fetchOptions: any = {
             method: "GET",
             headers: {
                 "User-Agent": "FlashkuApp/1.0"
             },
             signal: controller.signal
-        });
+        };
+        if (dispatcher) {
+            fetchOptions.dispatcher = dispatcher;
+        }
+
+        const response = await fetch(testUrl, fetchOptions);
 
         clearTimeout(timeout);
 
@@ -159,14 +179,16 @@ export async function enrichBatchWithGemini(
         }
     };
 
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    const baseUrl = (process.env.GEMINI_BASE_URL || "https://generativelanguage.googleapis.com/v1beta").replace(/\/+$/, "");
+    const apiUrl = `${baseUrl}/models/${model}:generateContent?key=${apiKey}`;
 
     for (let attempt = 0; attempt < 2; attempt++) {
         try {
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), 35000);
 
-            const response = await fetch(apiUrl, {
+            const dispatcher = getGeminiDispatcher();
+            const fetchOptions: any = {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -174,7 +196,12 @@ export async function enrichBatchWithGemini(
                 },
                 body: JSON.stringify(requestPayload),
                 signal: controller.signal
-            });
+            };
+            if (dispatcher) {
+                fetchOptions.dispatcher = dispatcher;
+            }
+
+            const response = await fetch(apiUrl, fetchOptions);
 
             clearTimeout(timeout);
 
