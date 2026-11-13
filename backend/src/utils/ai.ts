@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 dotenv.config();
 import Groq from "groq-sdk";
-import { ProxyAgent, Socks5ProxyAgent, Dispatcher } from "undici";
+import { ProxyAgent, Socks5ProxyAgent, Dispatcher, fetch as undiciFetch } from "undici";
 
 export interface AiQuotaStatus {
     is_configured: boolean;
@@ -53,7 +53,7 @@ function getGroqClient(apiKey: string, baseUrl?: string, proxyUrl?: string): Gro
         ...(baseUrl ? { baseURL: baseUrl } : {}),
         maxRetries: 2,
         timeout: 25000,
-        ...(dispatcher ? { fetchOptions: { dispatcher } as any } : {})
+        ...(dispatcher ? { fetch: undiciFetch as any, fetchOptions: { dispatcher } as any } : {})
     });
 }
 
