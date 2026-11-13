@@ -1,5 +1,5 @@
 import dotenv from "dotenv";
-import { ProxyAgent } from "undici";
+import { fetch as undiciFetch, ProxyAgent } from "undici";
 dotenv.config();
 
 function getGeminiDispatcher() {
@@ -64,7 +64,7 @@ export async function checkGeminiQuotaStatus(): Promise<GeminiQuotaStatus> {
             fetchOptions.dispatcher = dispatcher;
         }
 
-        const response = await fetch(testUrl, fetchOptions);
+        const response = await undiciFetch(testUrl, fetchOptions);
 
         clearTimeout(timeout);
 
@@ -82,7 +82,7 @@ export async function checkGeminiQuotaStatus(): Promise<GeminiQuotaStatus> {
         const statusCode = response.status;
         let errMessage = "";
         try {
-            const errData = await response.json();
+            const errData: any = await response.json();
             errMessage = errData?.error?.message || "";
         } catch {
             errMessage = response.statusText;
@@ -117,12 +117,13 @@ export async function checkGeminiQuotaStatus(): Promise<GeminiQuotaStatus> {
             };
         }
     } catch (err: any) {
+        const causeMsg = err.cause ? ` (${err.cause.message || err.cause})` : "";
         return {
             is_configured: true,
             is_available: false,
             status: "network_error",
             model: model,
-            message: `Koneksi jaringan ke Gemini API gagal: ${err.message || err}`,
+            message: `Koneksi jaringan ke Gemini API gagal: ${err.message || err}${causeMsg}`,
             checked_at: nowIso
         };
     }
@@ -201,7 +202,7 @@ export async function enrichBatchWithGemini(
                 fetchOptions.dispatcher = dispatcher;
             }
 
-            const response = await fetch(apiUrl, fetchOptions);
+            const response = await undiciFetch(apiUrl, fetchOptions);
 
             clearTimeout(timeout);
 
@@ -215,7 +216,7 @@ export async function enrichBatchWithGemini(
                 break;
             }
 
-            const data = await response.json();
+            const data: any = await response.json();
             const candidate = data?.candidates?.[0];
             const textContent = candidate?.content?.parts?.[0]?.text || "";
 
