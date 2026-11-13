@@ -1,8 +1,6 @@
 import fs from "fs";
 import path from "path";
 import { spawn } from "child_process";
-import { Ytdl, Client } from "@distube/ytdl-core";
-import ffmpeg from "fluent-ffmpeg";
 import ffmpegStatic from "ffmpeg-static";
 
 export interface YouTubeMetadata {
@@ -12,24 +10,6 @@ export interface YouTubeMetadata {
     duration_seconds: number;
     thumbnail_url: string;
     audio_path: string;
-}
-
-if (ffmpegStatic) {
-    ffmpeg.setFfmpegPath(ffmpegStatic);
-}
-
-export function getYtdlInstance(): Ytdl {
-    const cookie = (process.env.YOUTUBE_COOKIE || process.env.YT_COOKIE || "").trim();
-    return new Ytdl({
-        clients: [
-            Client.Tv,
-            Client.Mweb,
-            Client.WebEmbedded,
-            Client.WebMusic,
-            Client.VisionOS
-        ],
-        cookie: cookie ? cookie : undefined
-    });
 }
 
 export function extractYouTubeId(urlOrId: string): string | null {
@@ -53,6 +33,61 @@ export function extractYouTubeId(urlOrId: string): string | null {
     }
 
     return null;
+}
+
+let cachedBinaryPath: string | null = null;
+
+export async function ensureYtDlpBinary(): Promise<string> {
+    if (cachedBinaryPath && fs.existsSync(cachedBinaryPath)) {
+        return cachedBinaryPath;
+    }
+
+    if (process.env.YT_DLP_PATH && fs.existsSync(process.env.YT_DLP_PATH)) {
+        cachedBinaryPath = process.env.YT_DLP_PATH;
+        return cachedBinaryPath;
+    }
+
+    const isWin = process.platform === "win32";
+    const filename = isWin ? "yt-dlp.exe" : "yt-dlp";
+
+    const candidates = [
+        path.resolve(process.cwd(), "bin", filename),
+        "/usr/local/bin/yt-dlp",
+        "/usr/bin/yt-dlp",
+        path.resolve(process.cwd(), filename),
+    ];
+
+    for (const candidate of candidates) {
+        if (fs.existsSync(candidate)) {
+            cachedBinaryPath = candidate;
+            return candidate;
+        }
+    }
+
+    // Auto-download standalone binary if missing
+    const binDir = path.resolve(process.cwd(), "bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    const targetPath = path.resolve(binDir, filename);
+
+    const downloadUrl = isWin
+        ? "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+        : "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp";
+
+    console.log(`[YouTube Extractor] Downloading standalone yt-dlp binary from ${downloadUrl}...`);
+    const resp = await fetch(downloadUrl, { redirect: "follow" });
+    if (!resp.ok) {
+        throw new Error(`Failed to download standalone yt-dlp binary: ${resp.status} ${resp.statusText}`);
+    }
+
+    const buffer = Buffer.from(await resp.arrayBuffer());
+    fs.writeFileSync(targetPath, buffer);
+    if (!isWin) {
+        fs.chmodSync(targetPath, 0o755);
+    }
+    console.log(`[YouTube Extractor] Standalone yt-dlp binary downloaded successfully to ${targetPath}`);
+
+    cachedBinaryPath = targetPath;
+    return targetPath;
 }
 
 export async function downloadThumbnail(
@@ -101,24 +136,7 @@ export async function downloadThumbnail(
     return remoteUrl || candidateUrls[0];
 }
 
-function findStandaloneYtDlpBinary(): string | null {
-    if (process.env.YT_DLP_PATH && fs.existsSync(process.env.YT_DLP_PATH)) {
-        return process.env.YT_DLP_PATH;
-    }
-    const candidates = [
-        "/usr/local/bin/yt-dlp",
-        "/usr/bin/yt-dlp",
-        path.resolve(process.cwd(), "bin/yt-dlp"),
-        path.resolve(process.cwd(), "bin/yt-dlp.exe"),
-    ];
-    for (const c of candidates) {
-        if (fs.existsSync(c)) return c;
-    }
-    return null;
-}
-
-async function downloadWithYtDlpBinary(
-    binaryPath: string,
+async function extractAudioWithYtDlp(
     youtubeId: string,
     outputDir: string
 ): Promise<string> {
@@ -130,68 +148,53 @@ async function downloadWithYtDlpBinary(
         return localStaticPath;
     }
 
+    const binary = await ensureYtDlpBinary();
     const outputTemplate = path.resolve(outputDir, `${youtubeId}.%(ext)s`);
-    const args = [
+
+    const args: string[] = [
+        "--no-warnings",
+        "--no-progress",
+        "--extractor-args", "youtube:player_client=android,web,tv",
         "-x",
         "--audio-format", "mp3",
         "--audio-quality", "192K",
-        "-o", outputTemplate,
-        `https://www.youtube.com/watch?v=${youtubeId}`
     ];
+
     if (ffmpegStatic) {
-        args.splice(4, 0, "--ffmpeg-location", ffmpegStatic);
+        args.push("--ffmpeg-location", ffmpegStatic);
     }
 
+    // Support YouTube cookies if configured in .env or cookies.txt
+    const cookieEnv = (process.env.YOUTUBE_COOKIE || process.env.YT_COOKIE || "").trim();
+    const cookieFile = path.resolve(process.cwd(), "cookies.txt");
+    if (fs.existsSync(cookieFile)) {
+        args.push("--cookies", cookieFile);
+    } else if (cookieEnv) {
+        args.push("--add-header", `Cookie: ${cookieEnv}`);
+    }
+
+    args.push("-o", outputTemplate, `https://www.youtube.com/watch?v=${youtubeId}`);
+
     return new Promise((resolve, reject) => {
-        const proc = spawn(binaryPath, args, { stdio: "ignore" });
-        proc.on("error", reject);
+        const proc = spawn(binary, args, { stdio: ["ignore", "pipe", "pipe"] });
+        let stderr = "";
+
+        proc.stderr.on("data", (chunk) => {
+            stderr += chunk.toString();
+        });
+
         proc.on("close", (code) => {
             if (code === 0 && fs.existsSync(localFilePath)) {
                 resolve(localStaticPath);
             } else {
-                reject(new Error(`yt-dlp binary exited with code ${code}`));
+                reject(new Error(`yt-dlp failed (code ${code}): ${stderr.slice(-300)}`));
             }
         });
+
+        proc.on("error", (err) => {
+            reject(err);
+        });
     });
-}
-
-async function downloadAudioPureNode(
-    youtubeId: string,
-    outputDir: string
-): Promise<string> {
-    const localFilename = `${youtubeId}.mp3`;
-    const localFilePath = path.resolve(outputDir, localFilename);
-    const localStaticPath = `/uploads/songs/${localFilename}`;
-
-    if (fs.existsSync(localFilePath) && fs.statSync(localFilePath).size > 10000) {
-        return localStaticPath;
-    }
-
-    const ytdl = getYtdlInstance();
-    const stream = await ytdl.download(youtubeId, {
-        filter: { hasAudio: true, hasVideo: false },
-        quality: "highestaudio",
-    });
-
-    await new Promise<void>((resolve, reject) => {
-        const proc = ffmpeg(stream)
-            .audioCodec("libmp3lame")
-            .audioBitrate(192)
-            .format("mp3")
-            .on("error", (err) => {
-                if (fs.existsSync(localFilePath)) {
-                    try { fs.unlinkSync(localFilePath); } catch {}
-                }
-                reject(err);
-            })
-            .on("end", () => {
-                resolve();
-            });
-
-        proc.save(localFilePath);
-    });
-
-    return localStaticPath;
 }
 
 export async function fetchYouTubeData(youtubeId: string): Promise<YouTubeMetadata> {
@@ -205,48 +208,63 @@ export async function fetchYouTubeData(youtubeId: string): Promise<YouTubeMetada
     let durationSeconds = 0;
     let rawThumbnail: string | undefined;
 
-    const ytdl = getYtdlInstance();
-
+    // 1. First attempt: Official YouTube oEmbed API (Never blocked on datacenter IPs)
     try {
-        const info = await ytdl.getInfo(youtubeId);
-        title = info.videoDetails.title || "Unknown Title";
-        artist = info.videoDetails.author?.name || "Unknown Artist";
-        durationSeconds = Number(info.videoDetails.lengthSeconds) || 0;
-        if (info.videoDetails.thumbnails && info.videoDetails.thumbnails.length > 0) {
-            rawThumbnail = info.videoDetails.thumbnails[info.videoDetails.thumbnails.length - 1].url;
-        }
-    } catch (infoErr: any) {
-        // Fallback: try dedicated fallback client if first pass threw bot/auth check
-        try {
-            const fallbackYtdl = new Ytdl({ clients: [Client.Tv] });
-            const info = await fallbackYtdl.getInfo(youtubeId);
-            title = info.videoDetails.title || "Unknown Title";
-            artist = info.videoDetails.author?.name || "Unknown Artist";
-            durationSeconds = Number(info.videoDetails.lengthSeconds) || 0;
-            if (info.videoDetails.thumbnails && info.videoDetails.thumbnails.length > 0) {
-                rawThumbnail = info.videoDetails.thumbnails[info.videoDetails.thumbnails.length - 1].url;
+        const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${youtubeId}&format=json`;
+        const resp = await fetch(oembedUrl, {
+            headers: {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
             }
-        } catch {
-            const ytDlpBin = findStandaloneYtDlpBinary();
-            if (!ytDlpBin) {
-                throw new Error(`Failed to fetch YouTube metadata: ${infoErr.message}`);
-            }
+        });
+        if (resp.ok) {
+            const data: any = await resp.json();
+            if (data.title) title = data.title;
+            if (data.author_name) artist = data.author_name;
+            if (data.thumbnail_url) rawThumbnail = data.thumbnail_url;
         }
+    } catch (e) {
+        // oEmbed fallback ignored
     }
 
+    // 2. Fetch metadata & duration via standalone yt-dlp if duration not found
+    try {
+        const binary = await ensureYtDlpBinary();
+        const jsonArgs = [
+            "--no-warnings",
+            "--dump-json",
+            "--skip-download",
+            "--extractor-args", "youtube:player_client=android,web,tv",
+            `https://www.youtube.com/watch?v=${youtubeId}`
+        ];
+        const jsonOut = await new Promise<string>((resolve, reject) => {
+            const proc = spawn(binary, jsonArgs);
+            let stdout = "";
+            let stderr = "";
+            proc.stdout.on("data", (d) => stdout += d.toString());
+            proc.stderr.on("data", (d) => stderr += d.toString());
+            proc.on("close", (code) => {
+                if (code === 0 && stdout) resolve(stdout);
+                else reject(new Error(stderr.slice(-200) || `Exit code ${code}`));
+            });
+            proc.on("error", reject);
+        });
+
+        const meta = JSON.parse(jsonOut);
+        if (meta.title && title === "Unknown Title") title = meta.title;
+        if ((meta.uploader || meta.artist || meta.channel) && artist === "Unknown Artist") {
+            artist = meta.artist || meta.uploader || meta.channel;
+        }
+        if (meta.duration) durationSeconds = Math.round(Number(meta.duration)) || 0;
+        if (!rawThumbnail && meta.thumbnail) rawThumbnail = meta.thumbnail;
+    } catch (err: any) {
+        console.warn(`[YouTube Extractor Warning] Failed to get yt-dlp json metadata: ${err.message}`);
+    }
+
+    // 3. Download thumbnail
     const localThumbnailPath = await downloadThumbnail(rawThumbnail, youtubeId, thumbnailsDir);
 
-    let localAudioPath: string;
-    try {
-        localAudioPath = await downloadAudioPureNode(youtubeId, outputDir);
-    } catch (nodeErr: any) {
-        const ytDlpBin = findStandaloneYtDlpBinary();
-        if (ytDlpBin) {
-            localAudioPath = await downloadWithYtDlpBinary(ytDlpBin, youtubeId, outputDir);
-        } else {
-            throw new Error(`Failed to extract YouTube audio: ${nodeErr.message}`);
-        }
-    }
+    // 4. Download audio to MP3 using standalone yt-dlp
+    const localAudioPath = await extractAudioWithYtDlp(youtubeId, outputDir);
 
     return {
         youtube_id: youtubeId,
