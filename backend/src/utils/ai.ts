@@ -57,7 +57,12 @@ export async function checkAiQuotaStatus(): Promise<AiQuotaStatus> {
 
     try {
         const groq = getGroqClient(config.apiKey, config.baseUrl);
-        await groq.models.list();
+        // Test actual inference availability with a minimal 1-token prompt for the target model
+        await groq.chat.completions.create({
+            model: config.model,
+            messages: [{ role: "user", content: "ping" }],
+            max_tokens: 1
+        });
 
         return {
             is_configured: true,
@@ -70,7 +75,8 @@ export async function checkAiQuotaStatus(): Promise<AiQuotaStatus> {
         };
     } catch (err: any) {
         const statusCode = err?.status || err?.statusCode;
-        const errMessage = err?.message || String(err);
+        const rawMessage = err?.error?.error?.message || err?.error?.message || err?.message || String(err);
+        const errMessage = typeof rawMessage === "string" ? rawMessage.replace(/^\d{3}\s*/, "").trim() : String(rawMessage);
 
         if (statusCode === 401) {
             return {
@@ -89,7 +95,7 @@ export async function checkAiQuotaStatus(): Promise<AiQuotaStatus> {
                 status: "error",
                 model: config.model,
                 provider: "groq",
-                message: `Akses ditolak Groq (HTTP 403 Forbidden): ${errMessage}`,
+                message: `Akses model ${config.model} ditolak Groq (HTTP 403 Forbidden): ${errMessage}. Periksa Model Permissions di Groq Console (console.groq.com).`,
                 checked_at: nowIso
             };
         } else if (statusCode === 429) {
@@ -99,7 +105,7 @@ export async function checkAiQuotaStatus(): Promise<AiQuotaStatus> {
                 status: "quota_exceeded",
                 model: config.model,
                 provider: "groq",
-                message: `Batas kuota / rate limit Groq terlampaui (HTTP 429).`,
+                message: `Batas kuota / rate limit Groq terlampaui (HTTP 429): ${errMessage}`,
                 checked_at: nowIso
             };
         } else {
