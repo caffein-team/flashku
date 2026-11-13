@@ -1,37 +1,90 @@
+import kuromoji, { Tokenizer } from "kuromoji";
+import * as wanakana from "wanakana";
+import path from "path";
 import { IPhrase } from "../types/song";
-import { runPythonScript } from "./python-runner";
 
-function parseJsonArrayOutput(raw: string): any {
-    const markerMatch = raw.match(/__JSON_START__([\s\S]*?)__JSON_END__/);
-    if (markerMatch && markerMatch[1]) {
-        return JSON.parse(markerMatch[1].trim());
-    }
+// Japanese POS Mapping (MeCab/IPADic -> English)
+const POS_MAP: Record<string, string> = {
+    "名詞": "Noun",
+    "動詞": "Verb",
+    "形容詞": "Adjective",
+    "副詞": "Adverb",
+    "助詞": "Particle",
+    "助動詞": "Auxiliary Verb",
+    "接続詞": "Conjunction",
+    "感動詞": "Interjection",
+    "連体詞": "Pre-noun Adjectival",
+};
 
-    try {
-        return JSON.parse(raw.trim());
-    } catch {
-        const firstBracket = raw.indexOf("[");
-        const lastBracket = raw.lastIndexOf("]");
-        if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
-            const candidate = raw.substring(firstBracket, lastBracket + 1);
-            return JSON.parse(candidate);
-        }
-        throw new Error(`Invalid JSON format: ${raw}`);
+let tokenizerPromise: Promise<Tokenizer<any>> | null = null;
+
+export function getTokenizer(): Promise<Tokenizer<any>> {
+    if (!tokenizerPromise) {
+        tokenizerPromise = new Promise((resolve, reject) => {
+            try {
+                const kuromojiMain = require.resolve("kuromoji");
+                const dicPath = path.resolve(path.dirname(kuromojiMain), "..", "dict");
+
+                kuromoji.builder({ dicPath }).build((err, tokenizer) => {
+                    if (err) {
+                        tokenizerPromise = null;
+                        return reject(err);
+                    }
+                    resolve(tokenizer);
+                });
+            } catch (err) {
+                tokenizerPromise = null;
+                reject(err);
+            }
+        });
     }
+    return tokenizerPromise;
 }
 
 export async function tokenizeJapaneseBatch(lines: string[]): Promise<IPhrase[][]> {
     if (!lines || lines.length === 0) return [];
 
-    const rawResult = await runPythonScript(["tokenize_batch"], JSON.stringify(lines));
+    const tokenizer = await getTokenizer();
+    const results: IPhrase[][] = [];
 
-    try {
-        const parsed = parseJsonArrayOutput(rawResult);
-        if (parsed && parsed.error) {
-            throw new Error(parsed.error);
+    for (const lineText of lines) {
+        if (!lineText || !lineText.trim()) {
+            results.push([]);
+            continue;
         }
-        return parsed as IPhrase[][];
-    } catch (err: any) {
-        throw new Error(`Failed to parse Japanese tokenizer output: ${err.message || rawResult}`);
+
+        const tokens = tokenizer.tokenize(lineText);
+        const phrases: IPhrase[] = [];
+        let wordOrder = 1;
+
+        for (const token of tokens) {
+            const surface = (token.surface_form || "").trim();
+            const posPrimary = token.pos;
+
+            // Skip empty tokens and Japanese punctuation/symbols
+            if (!surface || posPrimary === "記号") {
+                continue;
+            }
+
+            const baseForm = token.basic_form && token.basic_form !== "*" ? token.basic_form : surface;
+            const rawReading = token.reading && token.reading !== "*" ? token.reading : surface;
+            const hiraganaReading = wanakana.toHiragana(rawReading);
+            const romaji = wanakana.toRomaji(hiraganaReading);
+            const posEnglish = POS_MAP[posPrimary] || posPrimary;
+
+            phrases.push({
+                surface_form: surface,
+                dictionary_form: baseForm,
+                reading: hiraganaReading,
+                romaji: romaji,
+                part_of_speech: posEnglish,
+                meaning: null,
+                word_order: wordOrder++
+            });
+        }
+
+        results.push(phrases);
     }
+
+    return results;
 }
