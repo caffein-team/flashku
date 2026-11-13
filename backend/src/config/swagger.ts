@@ -1,5 +1,31 @@
 import { Application, Request, Response, NextFunction } from "express";
 import swaggerUi from "swagger-ui-express";
+import dotenv from "dotenv";
+
+dotenv.config();
+
+const appUrl = (process.env.APP_URL || process.env.BASE_URL || "").trim().replace(/\/+$/, "");
+const port = process.env.PORT || 5000;
+
+const configuredServers: Array<{ url: string; description: string }> = [];
+
+if (appUrl) {
+    configuredServers.push({
+        url: appUrl,
+        description: `Production / Tunnel Server (${appUrl})`
+    });
+}
+
+configuredServers.push(
+    {
+        url: "/",
+        description: "Auto Relative Path (Same Domain / Tunnel)"
+    },
+    {
+        url: `http://127.0.0.1:${port}`,
+        description: `Local Development (http://127.0.0.1:${port})`
+    }
+);
 
 export const swaggerSpec = {
     openapi: "3.0.0",
@@ -8,12 +34,7 @@ export const swaggerSpec = {
         version: "1.0.0",
         description: "Dokumentasi REST API Flashku - Pembelajaran Bahasa Jepang berbasis Musik, Lirik Sinkron LRC, dan SRS Flashcard."
     },
-    servers: [
-        {
-            url: "/",
-            description: "Current Server (Auto Detect / Tunnel Friendly)"
-        }
-    ],
+    servers: configuredServers,
     components: {
         securitySchemes: {
             BearerAuth: {

@@ -164,9 +164,9 @@ UserRouter.post("/avatar", (req: Request, res: Response) => {
             // Clean up old avatar if stored locally
             deleteLocalAvatarFile(user.avatar);
 
-            const protocol = req.protocol;
-            const host = req.get("host");
-            const avatarUrl = `${protocol}://${host}/uploads/avatars/${req.file.filename}`;
+            const appUrl = (process.env.APP_URL || process.env.BASE_URL || "").trim().replace(/\/+$/, "");
+            const baseUrl = appUrl || `${req.protocol}://${req.get("host")}`;
+            const avatarUrl = `${baseUrl}/uploads/avatars/${req.file.filename}`;
 
             await db.collection<IUser>("users").updateOne(
                 { _id: user._id },
