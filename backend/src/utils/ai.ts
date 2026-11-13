@@ -1,6 +1,7 @@
 import dotenv from "dotenv";
 dotenv.config();
 import Groq from "groq-sdk";
+import { ProxyAgent } from "undici";
 
 export interface AiQuotaStatus {
     is_configured: boolean;
@@ -21,21 +22,33 @@ function getAiConfig() {
     const apiKey = (process.env.GROQ_API_KEY || process.env.GROK_API_KEY || "").replace(/^"|"$/g, "").trim();
     const model = process.env.GROQ_MODEL || process.env.GROK_MODEL || "llama-3.3-70b-versatile";
     const baseUrl = (process.env.GROQ_BASE_URL || process.env.GROK_BASE_URL || "").replace(/\/+$/, "").trim();
+    const proxyUrl = (process.env.GROQ_PROXY || process.env.AI_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || "").trim();
 
     return {
         provider: "groq" as const,
         apiKey,
         model,
         baseUrl: baseUrl || undefined,
+        proxyUrl: proxyUrl || undefined,
     };
 }
 
-function getGroqClient(apiKey: string, baseUrl?: string): Groq {
+function getGroqClient(apiKey: string, baseUrl?: string, proxyUrl?: string): Groq {
+    let dispatcher: ProxyAgent | undefined;
+    if (proxyUrl) {
+        try {
+            dispatcher = new ProxyAgent(proxyUrl);
+        } catch (e: any) {
+            console.warn(`[Groq Proxy Warning] Failed to initialize ProxyAgent (${proxyUrl}): ${e.message}`);
+        }
+    }
+
     return new Groq({
         apiKey,
         ...(baseUrl ? { baseURL: baseUrl } : {}),
         maxRetries: 2,
-        timeout: 25000
+        timeout: 25000,
+        ...(dispatcher ? { fetchOptions: { dispatcher } as any } : {})
     });
 }
 
@@ -56,7 +69,7 @@ export async function checkAiQuotaStatus(): Promise<AiQuotaStatus> {
     }
 
     try {
-        const groq = getGroqClient(config.apiKey, config.baseUrl);
+        const groq = getGroqClient(config.apiKey, config.baseUrl, config.proxyUrl);
         // Test actual inference availability with a minimal 1-token prompt for the target model
         await groq.chat.completions.create({
             model: config.model,
@@ -159,7 +172,7 @@ export async function enrichBatchWithAi(
         `}`;
 
     try {
-        const groq = getGroqClient(config.apiKey, config.baseUrl);
+        const groq = getGroqClient(config.apiKey, config.baseUrl, config.proxyUrl);
         const completion = await groq.chat.completions.create({
             model: config.model,
             messages: [
