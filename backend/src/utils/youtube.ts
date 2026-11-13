@@ -90,6 +90,23 @@ export async function ensureYtDlpBinary(): Promise<string> {
     return targetPath;
 }
 
+function findCookieFile(): string | null {
+    if (process.env.YOUTUBE_COOKIE_FILE && fs.existsSync(process.env.YOUTUBE_COOKIE_FILE)) {
+        return process.env.YOUTUBE_COOKIE_FILE;
+    }
+    const candidates = [
+        path.resolve(process.cwd(), "cookies.txt"),
+        path.resolve(process.cwd(), "../cookies.txt"),
+        path.resolve(process.cwd(), "config/cookies.txt"),
+    ];
+    for (const candidate of candidates) {
+        if (fs.existsSync(candidate)) {
+            return candidate;
+        }
+    }
+    return null;
+}
+
 export async function downloadThumbnail(
     remoteUrl: string | undefined,
     youtubeId: string,
@@ -152,9 +169,10 @@ async function extractAudioWithYtDlp(
     const outputTemplate = path.resolve(outputDir, `${youtubeId}.%(ext)s`);
 
     const args: string[] = [
+        "-4", // Force IPv4 to avoid blacklisted datacenter IPv6 blocks
         "--no-warnings",
         "--no-progress",
-        "--extractor-args", "youtube:player_client=android,web,tv",
+        "--extractor-args", "youtube:player_client=ios,android,tv",
         "-x",
         "--audio-format", "mp3",
         "--audio-quality", "192K",
@@ -164,13 +182,10 @@ async function extractAudioWithYtDlp(
         args.push("--ffmpeg-location", ffmpegStatic);
     }
 
-    // Support YouTube cookies if configured in .env or cookies.txt
-    const cookieEnv = (process.env.YOUTUBE_COOKIE || process.env.YT_COOKIE || "").trim();
-    const cookieFile = path.resolve(process.cwd(), "cookies.txt");
-    if (fs.existsSync(cookieFile)) {
+    // Automatically detect cookies.txt or YOUTUBE_COOKIE_FILE
+    const cookieFile = findCookieFile();
+    if (cookieFile) {
         args.push("--cookies", cookieFile);
-    } else if (cookieEnv) {
-        args.push("--add-header", `Cookie: ${cookieEnv}`);
     }
 
     args.push("-o", outputTemplate, `https://www.youtube.com/watch?v=${youtubeId}`);
@@ -187,7 +202,14 @@ async function extractAudioWithYtDlp(
             if (code === 0 && fs.existsSync(localFilePath)) {
                 resolve(localStaticPath);
             } else {
-                reject(new Error(`yt-dlp failed (code ${code}): ${stderr.slice(-300)}`));
+                if (stderr.includes("bot") || stderr.includes("cookies") || stderr.includes("Sign in")) {
+                    reject(new Error(
+                        "YouTube memblokir IP Datacenter VPS (Anti-Bot Check). " +
+                        "Solusi: Pasang file 'cookies.txt' akun YouTube Anda di root direktori backend VPS (atau set YOUTUBE_COOKIE_FILE di .env)."
+                    ));
+                } else {
+                    reject(new Error(`yt-dlp failed (code ${code}): ${stderr.slice(-300)}`));
+                }
             }
         });
 
@@ -230,12 +252,18 @@ export async function fetchYouTubeData(youtubeId: string): Promise<YouTubeMetada
     try {
         const binary = await ensureYtDlpBinary();
         const jsonArgs = [
+            "-4",
             "--no-warnings",
             "--dump-json",
             "--skip-download",
-            "--extractor-args", "youtube:player_client=android,web,tv",
+            "--extractor-args", "youtube:player_client=ios,android,tv",
             `https://www.youtube.com/watch?v=${youtubeId}`
         ];
+        const cookieFile = findCookieFile();
+        if (cookieFile) {
+            jsonArgs.push("--cookies", cookieFile);
+        }
+
         const jsonOut = await new Promise<string>((resolve, reject) => {
             const proc = spawn(binary, jsonArgs);
             let stdout = "";
