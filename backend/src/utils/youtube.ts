@@ -71,7 +71,7 @@ export async function ensureYtDlpBinary(): Promise<string> {
 
     const downloadUrl = isWin
         ? "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
-        : "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp";
+        : "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux";
 
     console.log(`[YouTube Extractor] Downloading standalone yt-dlp binary from ${downloadUrl}...`);
     const resp = await fetch(downloadUrl, { redirect: "follow" });
