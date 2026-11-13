@@ -20,7 +20,7 @@ export interface AiEnrichResult {
 
 function getAiConfig() {
     const apiKey = (process.env.GROQ_API_KEY || process.env.GROK_API_KEY || "").replace(/^"|"$/g, "").trim();
-    const model = process.env.GROQ_MODEL || process.env.GROK_MODEL || "llama-3.3-70b-versatile";
+    const model = process.env.GROQ_MODEL || process.env.GROK_MODEL || "qwen/qwen3.8-27b";
     const baseUrl = (process.env.GROQ_BASE_URL || process.env.GROK_BASE_URL || "").replace(/\/+$/, "").trim();
     const proxyUrl = (process.env.GROQ_PROXY || process.env.AI_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || "").trim();
 
