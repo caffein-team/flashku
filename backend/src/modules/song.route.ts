@@ -1,12 +1,14 @@
 import express, { Request, Response } from "express";
+import path from "path";
 import { ObjectId } from "mongodb";
 import { getDB } from "../config/db";
 import { authenticateToken } from "../middlewares/auth.middleware";
-import { ILyricRow, ISong, IUserSong, SongImportBody, UpdateSongLyricsBody } from "../types/song";
+import { ILyricRow, ISong, IUserSong, SongImportBody, SongOffsetBody, UpdateSongLyricsBody } from "../types/song";
 import { cleanTrackAndArtist, fetchLrcLibLyrics, parseLrc, parsePlainLyrics } from "../utils/lyrics";
 import { extractYouTubeId, fetchYouTubeData } from "../utils/youtube";
 import { convertJapaneseTextToRomaji, isMeaningfulPhrase, tokenizeJapaneseLyrics } from "../utils/japanese";
 import { checkAiQuotaStatus, enrichBatchWithAi } from "../utils/ai";
+import { alignLyricsWithWhisper } from "../utils/audio-align";
 
 const SongRouter = express.Router();
 
@@ -146,6 +148,22 @@ SongRouter.post("/import", async (req: Request, res: Response) => {
             ];
         }
 
+        // 3.5 Auto-align lyric row timestamps with YouTube audio via Whisper
+        let lyrics_offset = 0;
+        if (["synced", "custom"].includes(lyrics_status) && yt_data.audio_path && parsed_rows.length > 0) {
+            try {
+                const fullAudioPath = path.resolve(process.cwd(), yt_data.audio_path.replace(/^\/+/, ""));
+                const alignResult = await alignLyricsWithWhisper(fullAudioPath, parsed_rows, target_lang);
+                if (alignResult.detected && alignResult.offset_seconds !== 0) {
+                    parsed_rows = alignResult.aligned_rows;
+                    lyrics_offset = alignResult.offset_seconds;
+                    lyrics_message += ` (Auto-aligned via Whisper: ${lyrics_offset > 0 ? "+" : ""}${lyrics_offset}s offset).`;
+                }
+            } catch (alignErr: any) {
+                console.warn("[Whisper Alignment Warning]: Failed to auto-align lyrics with audio:", alignErr.message || alignErr);
+            }
+        }
+
         // 4. Tokenize Japanese phrases and line-level romaji for all lyric lines
         if (target_lang === "ja" && parsed_rows.length > 0) {
             try {
@@ -185,6 +203,7 @@ SongRouter.post("/import", async (req: Request, res: Response) => {
             language: target_lang,
             lyrics_status: lyrics_status,
             lyrics_message: lyrics_message,
+            lyrics_offset: lyrics_offset,
             lyric_rows: parsed_rows,
             updated_at: now
         };
@@ -725,6 +744,22 @@ SongRouter.put("/:id/lyrics", async (req: Request, res: Response) => {
             });
         }
 
+        // Auto-align updated custom LRC with audio if available
+        let lyrics_offset = song.lyrics_offset || 0;
+        if (custom_lrc && custom_lrc.trim() && song.audio_path && parsed_rows.length > 0) {
+            try {
+                const fullAudioPath = path.resolve(process.cwd(), song.audio_path.replace(/^\/+/, ""));
+                const alignResult = await alignLyricsWithWhisper(fullAudioPath, parsed_rows, song.language || "ja");
+                if (alignResult.detected && alignResult.offset_seconds !== 0) {
+                    parsed_rows = alignResult.aligned_rows;
+                    lyrics_offset = alignResult.offset_seconds;
+                    lyrics_message += ` (Auto-aligned via Whisper: ${lyrics_offset > 0 ? "+" : ""}${lyrics_offset}s offset).`;
+                }
+            } catch (alignErr: any) {
+                console.warn("[Whisper Alignment Warning]: Failed to auto-align updated lyrics:", alignErr.message || alignErr);
+            }
+        }
+
         // Re-tokenize phrases and line-level romaji for Japanese lyrics
         if (song.language === "ja" && parsed_rows.length > 0) {
             try {
@@ -760,6 +795,7 @@ SongRouter.put("/:id/lyrics", async (req: Request, res: Response) => {
                     lyric_rows: parsed_rows,
                     lyrics_status: lyrics_status,
                     lyrics_message: lyrics_message,
+                    lyrics_offset: lyrics_offset,
                     updated_at: now
                 }
             }
@@ -827,6 +863,77 @@ SongRouter.delete("/:id", async (req: Request, res: Response) => {
         });
     } catch (err: unknown) {
         console.error("[Remove Song Error]:", err);
+        return res.status(500).json({
+            status: "error",
+            message: "Internal server error"
+        });
+    }
+});
+
+/**
+ * PATCH /api/songs/:id/offset
+ * Adjust the timing offset of all lyric rows (in seconds).
+ * Useful if the user wants to fine-tune the timing (+0.5s, -1.0s, etc.).
+ */
+SongRouter.patch("/:id/offset", async (req: Request, res: Response) => {
+    try {
+        const db = getDB();
+        const id = req.params.id as string;
+        const { offset_seconds } = req.body as SongOffsetBody;
+
+        if (!ObjectId.isValid(id)) {
+            return res.status(400).json({
+                status: "fail",
+                message: "Invalid song id format"
+            });
+        }
+
+        if (typeof offset_seconds !== "number" || isNaN(offset_seconds)) {
+            return res.status(400).json({
+                status: "fail",
+                message: "offset_seconds is required and must be a number"
+            });
+        }
+
+        const song_oid = new ObjectId(id);
+        const song = await db.collection<ISong>("songs").findOne({ _id: song_oid });
+        if (!song) {
+            return res.status(404).json({
+                status: "fail",
+                message: "Song not found"
+            });
+        }
+
+        const currentRows = song.lyric_rows || [];
+        const updatedRows = currentRows.map((row) => ({
+            ...row,
+            start_time: Math.max(0, Math.round((row.start_time + offset_seconds) * 100) / 100),
+            end_time: Math.max(0, Math.round((row.end_time + offset_seconds) * 100) / 100)
+        }));
+
+        const totalOffset = Math.round(((song.lyrics_offset || 0) + offset_seconds) * 100) / 100;
+        const now = new Date();
+
+        await db.collection<ISong>("songs").updateOne(
+            { _id: song_oid },
+            {
+                $set: {
+                    lyric_rows: updatedRows,
+                    lyrics_offset: totalOffset,
+                    updated_at: now
+                }
+            }
+        );
+
+        const updatedSong = await db.collection<ISong>("songs").findOne({ _id: song_oid });
+
+        return res.status(200).json({
+            status: "success",
+            message: `Lyric rows shifted by ${offset_seconds > 0 ? "+" : ""}${offset_seconds}s (Total offset: ${totalOffset}s)`,
+            data: updatedSong
+        });
+    } catch (err: unknown) {
+        console.error("[Adjust Song Offset Error]:", err);
         return res.status(500).json({
             status: "error",
             message: "Internal server error"

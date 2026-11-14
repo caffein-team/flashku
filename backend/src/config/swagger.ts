@@ -413,6 +413,39 @@ export const swaggerSpec = {
                 }
             }
         },
+        "/api/songs/{id}/offset": {
+            patch: {
+                tags: ["Songs"],
+                summary: "Manually adjust timing offset (in seconds) of all lyric rows",
+                security: [{ BearerAuth: [] }],
+                parameters: [
+                    { name: "id", in: "path", required: true, schema: { type: "string" } }
+                ],
+                requestBody: {
+                    required: true,
+                    content: {
+                        "application/json": {
+                            schema: {
+                                type: "object",
+                                required: ["offset_seconds"],
+                                properties: {
+                                    offset_seconds: {
+                                        type: "number",
+                                        example: 1.5,
+                                        description: "Offset in seconds to shift (can be positive or negative)"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                responses: {
+                    200: { description: "Lyric rows offset adjusted successfully" },
+                    400: { description: "Invalid offset value" },
+                    404: { description: "Song not found" }
+                }
+            }
+        },
         "/api/decks": {
             post: {
                 tags: ["Decks"],

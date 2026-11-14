@@ -37,6 +37,7 @@ export interface ISong {
     language: string;
     lyrics_status: "synced" | "plain" | "custom" | "not_found";
     lyrics_message?: string;
+    lyrics_offset?: number;
     lyric_rows: ILyricRow[];
     created_at: Date;
     updated_at?: Date;
@@ -61,4 +62,8 @@ export interface SongImportBody {
 export interface UpdateSongLyricsBody {
     custom_lrc?: string;
     plain_lyrics?: string;
+}
+
+export interface SongOffsetBody {
+    offset_seconds: number;
 }
