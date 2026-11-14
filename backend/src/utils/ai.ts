@@ -20,7 +20,7 @@ export interface AiEnrichResult {
 
 function getAiConfig() {
     const apiKey = (process.env.GROQ_API_KEY || process.env.GROK_API_KEY || "").replace(/^"|"$/g, "").trim();
-    const model = process.env.GROQ_MODEL || process.env.GROK_MODEL || "qwen/qwen3.8-27b";
+    const model = process.env.GROQ_MODEL || process.env.GROK_MODEL || "llama-3.3-70b-versatile";
     const baseUrl = (process.env.GROQ_BASE_URL || process.env.GROK_BASE_URL || "").replace(/\/+$/, "").trim();
     const proxyUrl = (process.env.GROQ_PROXY || process.env.AI_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || "").trim();
 
@@ -206,50 +206,68 @@ export async function enrichBatchWithAi(
     const maxAttempts = 3;
     let completion: any = null;
     let currentModel = config.model;
+    let useJsonMode = true;
 
-    // Calculate maximum output tokens dynamically to stay comfortably within Groq OTPM limits
-    const maxOutputTokens = Math.min(Math.max(batchRows.length * 55 + 120, 200), 450);
+    // Allocate sufficient output tokens so structured JSON is never cut off midway
+    const maxOutputTokens = Math.min(Math.max(batchRows.length * 150 + 300, 650), 1000);
 
     while (attempts < maxAttempts) {
         attempts++;
         try {
-            completion = await groq.chat.completions.create({
+            const requestOptions: any = {
                 model: currentModel,
                 messages: [
                     { role: "system", content: systemInstruction },
-                    { role: "user", content: "Data:\n" + JSON.stringify(userPayload) }
+                    { role: "user", content: "Input Data (respond strictly in the required JSON schema):\n" + JSON.stringify(userPayload) }
                 ],
-                response_format: { type: "json_object" },
                 max_tokens: maxOutputTokens,
-                temperature: 0.2
-            });
+                temperature: 0.1
+            };
+
+            if (useJsonMode) {
+                requestOptions.response_format = { type: "json_object" };
+            }
+
+            completion = await groq.chat.completions.create(requestOptions);
             break;
         } catch (err: any) {
             const isRateLimit = err?.status === 429 || err?.statusCode === 429 || String(err).includes("429");
-            if (isRateLimit && attempts < maxAttempts) {
+            const isJsonFailed = err?.status === 400 || err?.code === "json_validate_failed" || String(err).includes("json_validate_failed") || String(err).includes("Failed to validate JSON");
+
+            if ((isRateLimit || isJsonFailed) && attempts < maxAttempts) {
                 const rawMessage = err?.error?.error?.message || err?.error?.message || err?.message || String(err);
 
-                // If current model hit OTPM limit (e.g. qwen's 1000 OTPM ceiling), fallback to high-capacity models
+                // If current model failed validation or hit rate limits, switch model to high-capacity Llama models
                 const fallbackModels = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"];
                 const nextFallback = fallbackModels.find((m) => m !== currentModel);
 
-                if (nextFallback) {
-                    console.warn(`[Groq AI Rate Limit] 429 received on ${currentModel}. Switching fallback model to ${nextFallback}...`);
-                    currentModel = nextFallback;
-                    await new Promise((resolve) => setTimeout(resolve, 1000));
+                if (isJsonFailed) {
+                    console.warn(`[Groq AI JSON Error] 400 json_validate_failed on ${currentModel}. Retrying with model ${nextFallback || currentModel} and flexible format...`);
+                    if (nextFallback) currentModel = nextFallback;
+                    useJsonMode = false; // Fallback to prompt-guided JSON parsing if strict json_object failed
+                    await new Promise((resolve) => setTimeout(resolve, 800));
                     continue;
                 }
 
-                // If all fallback models exhausted or retry-after specified, parse wait seconds from Groq message
-                const match = String(rawMessage).match(/try again in ([\d.]+)s/i);
-                const waitMs = match
-                    ? Math.min(Math.ceil(parseFloat(match[1]) * 1000) + 1500, 35000)
-                    : attempts * 4000;
+                if (isRateLimit) {
+                    if (nextFallback) {
+                        console.warn(`[Groq AI Rate Limit] 429 received on ${currentModel}. Switching fallback model to ${nextFallback}...`);
+                        currentModel = nextFallback;
+                        await new Promise((resolve) => setTimeout(resolve, 1000));
+                        continue;
+                    }
 
-                console.warn(`[Groq AI Rate Limit] 429 received, waiting ${waitMs}ms before retry (attempt ${attempts}/${maxAttempts})...`);
-                await new Promise((resolve) => setTimeout(resolve, waitMs));
-                continue;
+                    const match = String(rawMessage).match(/try again in ([\d.]+)s/i);
+                    const waitMs = match
+                        ? Math.min(Math.ceil(parseFloat(match[1]) * 1000) + 1500, 35000)
+                        : attempts * 4000;
+
+                    console.warn(`[Groq AI Rate Limit] 429 received, waiting ${waitMs}ms before retry (attempt ${attempts}/${maxAttempts})...`);
+                    await new Promise((resolve) => setTimeout(resolve, waitMs));
+                    continue;
+                }
             }
+
             console.error("[Groq AI Exception]:", err?.status || err?.statusCode || "", err?.message || err);
             return { row_translations: {}, vocabulary_meanings: {} };
         }
@@ -261,8 +279,16 @@ export async function enrichBatchWithAi(
         if (cleanText.startsWith("```json")) cleanText = cleanText.substring(7);
         else if (cleanText.startsWith("```")) cleanText = cleanText.substring(3);
         if (cleanText.endsWith("```")) cleanText = cleanText.substring(0, cleanText.length - 3);
+        cleanText = cleanText.trim();
 
-        const parsed = JSON.parse(cleanText.trim());
+        // Extract JSON object if surrounded by extra text or tags
+        const firstBrace = cleanText.indexOf("{");
+        const lastBrace = cleanText.lastIndexOf("}");
+        if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+            cleanText = cleanText.substring(firstBrace, lastBrace + 1);
+        }
+
+        const parsed = JSON.parse(cleanText);
         const rowTranslations: Record<string, string> = {};
 
         if (Array.isArray(parsed.lines)) {
