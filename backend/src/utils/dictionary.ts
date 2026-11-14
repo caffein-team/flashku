@@ -1,13 +1,96 @@
+import path from "path";
+import fs from "fs";
 import { getDB } from "../config/db";
 
-/**
- * Built-in Japanese to Indonesian Dictionary for Lyrics & Flashcards.
- * Covers core vocabulary, emotional words, nature words, verbs, adjectives, adverbs,
- * pronouns, and grammatical particles commonly found in Japanese music.
- */
+// ---------------------------------------------------------------------------
+// JMdict In-Memory Index
+// ---------------------------------------------------------------------------
+// Loaded once at startup from the bundled JSON file (data/jmdict/).
+// Maps each kanji / kana surface form → English glosses string.
+// ---------------------------------------------------------------------------
 
-export const GRAMMAR_PARTICLES_ID: Record<string, string> = {
-    // Basic particles
+let jmdictIndex: Map<string, string> | null = null;
+let jmdictLoading = false;
+let jmdictLoadPromise: Promise<void> | null = null;
+
+const JMDICT_JSON_PATH = path.resolve(
+    __dirname,
+    "../../data/jmdict/jmdict-eng-common-3.6.2.json"
+);
+
+function buildJmdictIndex(jsonPath: string): Map<string, string> {
+    const raw = fs.readFileSync(jsonPath, "utf8");
+    const data = JSON.parse(raw) as {
+        version: string;
+        words: Array<{
+            id: string;
+            kanji: Array<{ text: string; common: boolean }>;
+            kana: Array<{ text: string; common: boolean }>;
+            sense: Array<{ gloss: Array<{ text: string; lang: string }> }>;
+        }>;
+    };
+
+    const index = new Map<string, string>();
+
+    for (const word of data.words) {
+        // Collect top English glosses (up to 4 meanings)
+        const glosses = word.sense
+            .flatMap((s) => s.gloss.filter((g) => g.lang === "eng").map((g) => g.text))
+            .slice(0, 4)
+            .join("; ");
+
+        if (!glosses) continue;
+
+        for (const k of word.kanji) {
+            if (!index.has(k.text)) index.set(k.text, glosses);
+        }
+        for (const k of word.kana) {
+            if (!index.has(k.text)) index.set(k.text, glosses);
+        }
+    }
+
+    return index;
+}
+
+export async function getJmdictIndex(): Promise<Map<string, string>> {
+    if (jmdictIndex) return jmdictIndex;
+
+    if (jmdictLoading && jmdictLoadPromise) {
+        await jmdictLoadPromise;
+        return jmdictIndex!;
+    }
+
+    jmdictLoading = true;
+    jmdictLoadPromise = new Promise<void>((resolve, reject) => {
+        try {
+            if (!fs.existsSync(JMDICT_JSON_PATH)) {
+                console.warn(`[JMdict] Dictionary file not found at ${JMDICT_JSON_PATH}. Vocab lookup will be limited.`);
+                jmdictIndex = new Map();
+                resolve();
+                return;
+            }
+
+            console.log("[JMdict] Building in-memory index from JSON...");
+            const startMs = Date.now();
+            jmdictIndex = buildJmdictIndex(JMDICT_JSON_PATH);
+            console.log(`[JMdict] Index ready: ${jmdictIndex.size} entries in ${Date.now() - startMs}ms`);
+            resolve();
+        } catch (err: any) {
+            console.error("[JMdict] Failed to build index:", err.message);
+            jmdictIndex = new Map();
+            resolve(); // Resolve anyway so the app continues
+        }
+    });
+
+    await jmdictLoadPromise;
+    return jmdictIndex!;
+}
+
+// ---------------------------------------------------------------------------
+// Grammar Particles Fallback (not in JMdict, always needed)
+// ---------------------------------------------------------------------------
+
+const GRAMMAR_PARTICLES_ID: Record<string, string> = {
     "は": "partikel penanda topik (adalah / tentang)",
     "が": "partikel penanda subjek",
     "を": "partikel penanda objek penderita",
@@ -20,8 +103,6 @@ export const GRAMMAR_PARTICLES_ID: Record<string, string> = {
     "から": "dari / sejak / karena / setelah",
     "まで": "sampai / hingga",
     "より": "daripada / lebih dari / sejak",
-    
-    // Sentence-ending & emotive particles
     "ね": "ya / kan? (penegas rasa simpati / persetujuan)",
     "よ": "lho / tahu! (memberi tahu / penegas informasi)",
     "か": "apakah (partikel penanda tanya)",
@@ -31,8 +112,6 @@ export const GRAMMAR_PARTICLES_ID: Record<string, string> = {
     "な": "ya / jangan (partikel seru / larangan)",
     "さ": "kan / begitulah (partikel nada bicara kasual)",
     "や": "dan (antara lain) / seperti",
-    
-    // Auxiliary & verb conjugations
     "だ": "adalah (kopula kasual)",
     "です": "adalah (kopula sopan)",
     "ます": "bentuk sopan kata kerja",
@@ -45,472 +124,97 @@ export const GRAMMAR_PARTICLES_ID: Record<string, string> = {
     "たら": "jika / setelah (bentuk pengandaian waktu)",
     "なら": "jika memang / kalau tentang",
     "たい": "ingin / mau (menyatakan keinginan)",
-    "らしい": "sepertinya / tampaknya (kabar burung)",
-    "そうだ": "katanya / sepertinya",
-    "ようだ": "tampak seperti / seolah-olah",
     "せる": "membuat / menyuruh (kausatif)",
     "させる": "membuat / menyuruh (kausatif)",
     "れる": "di- / bisa (pasif / potensial)",
     "られる": "di- / bisa (pasif / potensial)",
 };
 
-export const CORE_VOCABULARY_JA_ID: Record<string, string> = {
-    // Pronouns & People
-    "私": "aku / saya",
-    "わたし": "aku / saya",
-    "わたくし": "saya (formal)",
-    "僕": "aku (biasa digunakan pria/kasual)",
-    "ぼく": "aku",
-    "俺": "gue / aku (sangat kasual pria)",
-    "おれ": "gue / aku",
-    "君": "kamu / kau",
-    "きみ": "kamu / kau",
-    "あなた": "kamu / anda",
-    "あんた": "kamu (kasual/akrab)",
-    "彼": "dia (laki-laki) / pacar",
-    "彼女": "dia (perempuan) / pacar",
-    "誰": "siapa",
-    "だれ": "siapa",
-    "誰か": "seseorang",
-    "だれか": "seseorang",
-    "誰も": "siapa pun (tidak ada yang...)",
-    "友達": "teman / sahabat",
-    "ともだち": "teman",
-    "仲間": "kawan / rekan seperjuangan",
-    "恋人": "kekasih / pacar",
-    "人": "orang / manusia",
-    "ひと": "orang",
-    "人々": "orang-orang",
-    "子供": "anak-anak",
-    "僕ら": "kami / kita",
-    "私たち": "kami / kita",
-    "二人": "berdua / dua orang",
-    "ふたり": "berdua",
-    "一人": "sendirian / satu orang",
-    "ひとり": "sendirian",
-    "大人": "orang dewasa",
+// ---------------------------------------------------------------------------
+// Groq AI Translate: English → Indonesian (single word/phrase)
+// ---------------------------------------------------------------------------
 
-    // Demonstratives
-    "これ": "ini",
-    "それ": "itu",
-    "あれ": "itu (jauh)",
-    "どれ": "yang mana",
-    "ここ": "di sini",
-    "そこ": "di situ",
-    "あそこ": "di sana",
-    "どこ": "di mana",
-    "この": "ini (menerangkan kata benda)",
-    "その": "itu (menerangkan kata benda)",
-    "あの": "itu (jauh, menerangkan kata benda)",
-    "どの": "yang mana (menerangkan kata benda)",
+async function translateEnToId(englishMeaning: string, japaneseWord: string): Promise<string | null> {
+    try {
+        // Lazy-load to avoid circular dependency
+        const { default: Groq } = await import("groq-sdk");
+        const apiKey = (process.env.GROQ_API_KEY || process.env.GROK_API_KEY || "").replace(/^"|"$/g, "").trim();
+        if (!apiKey) return null;
 
-    // Emotions, Feelings & Mind
-    "心": "hati / jiwa / perasaan",
-    "こころ": "hati / perasaan",
-    "気持ち": "perasaan / suasana hati",
-    "きもち": "perasaan",
-    "愛": "cinta",
-    "あい": "cinta",
-    "恋": "asmara / jatuh cinta",
-    "こい": "asmara",
-    "涙": "air mata",
-    "なみだ": "air mata",
-    "笑顔": "senyuman / wajah tersenyum",
-    "えがお": "senyuman",
-    "笑み": "senyum",
-    "夢": "mimpi / cita-cita",
-    "ゆめ": "mimpi",
-    "希望": "harapan",
-    "きぼう": "harapan",
-    "願い": "doa / permohonan",
-    "ねがい": "permohonan / harapan",
-    "祈り": "doa",
-    "いのり": "doa",
-    "孤独": "kesepian / kesendirian",
-    "こどく": "kesepian",
-    "痛み": "rasa sakit / kepedihan",
-    "いたみ": "rasa sakit",
-    "勇気": "keberanian",
-    "ゆうき": "keberanian",
-    "奇跡": "keajaiban",
-    "きせき": "keajaiban",
-    "想い": "perasaan / pikiran / dambaan",
-    "おもい": "perasaan / kasih sayang",
-    "思い出": "kenangan / memori",
-    "おもいで": "kenangan",
-    "記憶": "ingatan",
-    "きおく": "ingatan",
-    "約束": "janji",
-    "やくそく": "janji",
-    "秘密": "rahasia",
-    "ひみつ": "rahasia",
-    "嘘": "kebohongan",
-    "うそ": "kebohongan",
-    "本当": "kebenaran / sungguh-sungguh",
-    "ほんとう": "sungguh-sungguh / nyata",
-    "真実": "kebenaran hakiki",
-    "しんじつ": "kebenaran",
-    "幸せ": "kebahagiaan",
-    "しあわせ": "kebahagiaan / bahagia",
+        const model = process.env.GROQ_MODEL || process.env.GROK_MODEL || "llama-3.3-70b-versatile";
+        const groq = new Groq({ apiKey });
 
-    // Nature, Weather & Space
-    "空": "langit",
-    "そら": "langit",
-    "星": "bintang",
-    "ほし": "bintang",
-    "月": "bulan",
-    "つき": "bulan",
-    "太陽": "matahari",
-    "たいよう": "matahari",
-    "雨": "hujan",
-    "あめ": "hujan",
-    "風": "angin",
-    "かぜ": "angin",
-    "雲": "awan",
-    "くも": "awan",
-    "虹": "pelangi",
-    "にじ": "pelangi",
-    "雪": "salju",
-    "ゆき": "salju",
-    "海": "laut / lautan",
-    "うみ": "laut",
-    "波": "ombak / gelombang",
-    "なみ": "ombak",
-    "川": "sungai",
-    "かわ": "sungai",
-    "山": "gunung",
-    "やま": "gunung",
-    "花": "bunga",
-    "はな": "bunga",
-    "桜": "bunga sakura",
-    "さくら": "sakura",
-    "木": "pohon",
-    "き": "pohon",
-    "葉": "daun",
-    "は": "daun",
-    "光": "cahaya / sinar",
-    "ひかり": "cahaya",
-    "影": "bayangan",
-    "かげ": "bayangan",
-    "闇": "kegelapan",
-    "やみ": "kegelapan",
-    "夜": "malam",
-    "よる": "malam",
-    "朝": "pagi",
-    "あさ": "pagi",
-    "夕焼け": "senja / langit lembayung",
-    "ゆうやけ": "senja",
-    "夕暮れ": "senja / temaram sore",
-    "季節": "musim",
-    "きせつ": "musim",
-    "春": "musim semi",
-    "はる": "musim semi",
-    "夏": "musim panas",
-    "なつ": "musim panas",
-    "秋": "musim gugur",
-    "あき": "musim gugur",
-    "冬": "musim dingin",
-    "ふゆ": "musim dingin",
+        const completion = await groq.chat.completions.create({
+            model,
+            messages: [
+                {
+                    role: "system",
+                    content: `You are a Japanese-English-Indonesian translator for a flashcard app.
+Given a Japanese word and its English dictionary meaning, provide a concise Indonesian translation.
+Output ONLY the Indonesian meaning (1-10 words), no explanations, no extra text.`
+                },
+                {
+                    role: "user",
+                    content: `Japanese word: "${japaneseWord}"\nEnglish meaning: "${englishMeaning}"\nIndonesian meaning:`
+                }
+            ],
+            max_tokens: 40,
+            temperature: 0.1
+        });
 
-    // Time, Place & Existence
-    "時間": "waktu",
-    "じかん": "waktu",
-    "時": "saat / waktu",
-    "とき": "saat / ketika",
-    "瞬間": "momen / detik / saat sekejap",
-    "しゅんかん": "kejap / momen",
-    "今日": "hari ini",
-    "きょう": "hari ini",
-    "明日": "besok / masa depan",
-    "あした": "besok",
-    "あす": "esok hari",
-    "昨日": "kemarin",
-    "きのう": "kemarin",
-    "今": "sekarang",
-    "いま": "sekarang",
-    "未来": "masa depan",
-    "みらい": "masa depan",
-    "過去": "masa lalu",
-    "かこ": "masa lalu",
-    "永遠": "keabadian / selamanya",
-    "えいえん": "abadi / selamanya",
-    "世界": "dunia",
-    "せかい": "dunia",
-    "地球": "bumi",
-    "場所": "tempat",
-    "ばしょ": "tempat",
-    "道": "jalan / jalur",
-    "みち": "jalan",
-    "街": "kota / jalanan kota",
-    "まち": "kota",
-    "部屋": "kamar / ruangan",
-    "へや": "kamar",
-    "窓": "jendela",
-    "まど": "jendela",
-    "扉": "pintu gerbang",
-    "ドア": "pintu",
+        const result = (completion.choices?.[0]?.message?.content || "").trim();
+        return result.length > 0 && result.length <= 80 ? result : null;
+    } catch {
+        return null;
+    }
+}
 
-    // Body & Voice
-    "声": "suara",
-    "こえ": "suara",
-    "音": "bunyi / suara",
-    "おと": "bunyi",
-    "歌": "lagu / nyanyian",
-    "うた": "lagu",
-    "音楽": "musik",
-    "おんがく": "musik",
-    "メロディー": "melodi",
-    "手": "tangan",
-    "て": "tangan",
-    "目": "mata",
-    "め": "mata",
-    "瞳": "manik mata / pandangan mata",
-    "ひとみ": "mata / pandangan",
-    "足": "kaki / langkah kaki",
-    "あし": "kaki",
-    "胸": "dada / relung dada",
-    "むね": "dada",
-    "言葉": "kata-kata / perkataan",
-    "ことば": "kata-kata",
+// ---------------------------------------------------------------------------
+// MongoDB dictionary_cache helpers
+// ---------------------------------------------------------------------------
 
-    // Verbs (Dictionary Form & Roots)
-    "愛する": "mencintai",
-    "あいする": "mencintai",
-    "信じる": "percaya / meyakini",
-    "しんじる": "percaya",
-    "忘れる": "melupakan",
-    "わすれる": "melupakan",
-    "覚える": "mengingat / menghafal",
-    "おぼえる": "mengingat",
-    "思い出す": "mengingat kembali",
-    "おもいだす": "teringat",
-    "思う": "berpikir / merasa",
-    "おもう": "merasa / berpikir",
-    "考える": "memikirkan",
-    "かんがえる": "memikirkan",
-    "知る": "tahu / mengenal",
-    "しる": "tahu / mengenal",
-    "分かる": "mengerti / paham",
-    "わかる": "mengerti",
-    "見る": "melihat / memandang",
-    "みる": "melihat",
-    "見つめる": "menatap lekat-lekat",
-    "みつめる": "menatap",
-    "見上げる": "menengadah / menatap ke atas",
-    "みあげる": "menatap ke atas",
-    "見下ろす": "melihat ke bawah",
-    "聞く": "mendengar / menyimak",
-    "きく": "mendengar",
-    "聞こえる": "terdengar",
-    "きこえる": "terdengar",
-    "探す": "mencari",
-    "さがす": "mencari",
-    "見つける": "menemukan",
-    "みつける": "menemukan",
-    "感じる": "merasakan",
-    "かんじる": "merasakan",
-    "言う": "berkata / berucap",
-    "いう": "berkata",
-    "話す": "berbicara / mengobrol",
-    "はなす": "berbicara",
-    "歌う": "bernyanyi / melantunkan lagu",
-    "うたう": "bernyanyi",
-    "叫ぶ": "berteriak / memekik",
-    "さけぶ": "berteriak",
-    "伝える": "menyampaikan",
-    "つたえる": "menyampaikan",
-    "届く": "sampai / tersampaikan",
-    "とどく": "sampai / tersampaikan",
-    "届ける": "menyampaikan / mengantarkan",
-    "笑う": "tertawa / tersenyum",
-    "わらう": "tertawa / tersenyum",
-    "泣く": "menangis",
-    "なく": "menangis",
-    "行く": "pergi / melangkah",
-    "いく": "pergi",
-    "ゆく": "pergi (puitis)",
-    "来る": "datang",
-    "くる": "datang",
-    "走る": "berlari",
-    "はしる": "berlari",
-    "歩く": "berjalan kaki",
-    "あるく": "berjalan kaki",
-    "飛ぶ": "terbang / melompat",
-    "とぶ": "terbang",
-    "立ち止まる": "berhenti melangkah",
-    "たちどまる": "berhenti melangkah",
-    "待つ": "menunggu / menanti",
-    "まつ": "menunggu",
-    "帰る": "pulang / kembali",
-    "かえる": "pulang",
-    "戻る": "kembali",
-    "もどる": "kembali",
-    "触れる": "menyentuh",
-    "ふれる": "menyentuh",
-    "抱きしめる": "memeluk erat",
-    "だきしめる": "memeluk erat",
-    "握る": "menggenggam",
-    "にぎる": "menggenggam",
-    "離す": "melepaskan / memisahkan",
-    "守る": "melindungi / menjaga",
-    "まもる": "melindungi",
-    "壊す": "merusak / menghancurkan",
-    "こわす": "merusak",
-    "失う": "kehilangan",
-    "うしなう": "kehilangan",
-    "消える": "lenyap / menghilang",
-    "きえる": "menghilang",
-    "生きる": "hidup / menjalani hidup",
-    "いきる": "hidup",
-    "死ぬ": "mati / tiada",
-    "しぬ": "mati",
-    "生まれる": "lahir",
-    "うまれる": "lahir",
-    "始まる": "dimulai",
-    "はじまる": "dimulai",
-    "終わる": "berakhir / selesai",
-    "おわる": "berakhir",
-    "続く": "berlanjut / berkesinambungan",
-    "つづく": "berlanjut",
-    "変わる": "berubah",
-    "かわる": "berubah",
-    "祈る": "berdoa / memohon",
-    "いのる": "berdoa",
-    "願う": "berharap / memohon",
-    "ねがう": "berharap",
-    "落ちる": "jatuh",
-    "おちる": "jatuh",
-    "降る": "turun (hujan / salju)",
-    "ふる": "turun (hujan/salju)",
-    "包む": "menyelimuti / memeluk",
-    "つつむ": "menyelimuti",
-    "照らす": "menyinari / menerangi",
-    "てらす": "menyinari",
-    "響く": "bergema / berkumandang",
-    "ひびく": "bergema",
-    "残る": "tersisa / tertinggal",
-    "のこる": "tersisa",
-    "越える": "melampaui / melewati",
-    "こえる": "melampaui",
-    "ある": "ada (benda mati)",
-    "いる": "ada (makhluk hidup)",
+async function getCachedMeaning(word: string): Promise<string | null> {
+    try {
+        const db = getDB();
+        const cached = await db.collection("dictionary_cache").findOne({ word });
+        return cached?.meaning_id || cached?.meaning_en || null;
+    } catch {
+        return null;
+    }
+}
 
-    // Adjectives (I-Adjectives & Na-Adjectives)
-    "優しい": "lembut / ramah / baik hati",
-    "やさしい": "lembut / baik hati",
-    "悲しい": "sedih",
-    "かなしい": "sedih",
-    "寂しい": "sepi / kesepian",
-    "さびしい": "sepi / kesepian",
-    "さみしい": "sepi",
-    "嬉しい": "senang / gembira",
-    "うれしい": "senang / gembira",
-    "楽しい": "menyenangkan / asyik",
-    "たのしい": "menyenangkan",
-    "美しい": "indah / rupawan",
-    "うつくしい": "indah",
-    "綺麗": "cantik / indah / bersih",
-    "きれい": "cantik / indah",
-    "青い": "biru",
-    "あおい": "biru",
-    "白い": "putih",
-    "しろい": "putih",
-    "黒い": "hitam",
-    "くろい": "hitam",
-    "赤い": "merah",
-    "あかい": "merah",
-    "暗い": "gelap",
-    "くらい": "gelap",
-    "明るい": "terang / ceria",
-    "あかるい": "terang",
-    "温かい": "hangat",
-    "あたたかい": "hangat",
-    "暖かい": "hangat (cuaca)",
-    "冷たい": "dingin (benda / sikap)",
-    "つめたい": "dingin",
-    "遠い": "jauh",
-    "とおい": "jauh",
-    "近い": "dekat",
-    "ちかい": "dekat",
-    "深い": "dalam",
-    "ふかい": "dalam",
-    "浅い": "dangkal",
-    "あさい": "dangkal",
-    "強い": "kuat",
-    "つよい": "kuat",
-    "弱い": "lemah",
-    "よわい": "lemah",
-    "小さい": "kecil",
-    "ちいさい": "kecil",
-    "大きい": "besar",
-    "おおきい": "besar",
-    "苦しい": "tersiksa / menyakitkan",
-    "くるしい": "tersiksa",
-    "切ない": "pilu / menyesakkan dada",
-    "せつない": "pilu / menyayat hati",
-    "痛い": "sakit / perih",
-    "いたい": "sakit",
-    "好き": "suka / gemar",
-    "すき": "suka",
-    "大好き": "sangat suka / cinta",
-    "だいすき": "sangat suka",
-    "嫌い": "benci / tidak suka",
-    "きらい": "benci",
-    "大切": "berharga / penting",
-    "たいせつ": "berharga",
-    "大事": "penting / bernilai",
-    "だいじ": "penting",
-    "静か": "tenang / hening / sunyi",
-    "しずか": "tenang / hening",
-    "怖くない": "tidak takut",
-    "怖い": "takut / menyeramkan",
-    "こわい": "takut",
+async function saveMeaningToCache(word: string, meaningEn: string, meaningId?: string): Promise<void> {
+    try {
+        const db = getDB();
+        await db.collection("dictionary_cache").updateOne(
+            { word },
+            {
+                $set: {
+                    word,
+                    meaning_en: meaningEn,
+                    ...(meaningId ? { meaning_id: meaningId } : {}),
+                    updated_at: new Date()
+                }
+            },
+            { upsert: true }
+        );
+    } catch {
+        // Ignore DB errors during cache write
+    }
+}
 
-    // Adverbs & Frequency
-    "いつも": "selalu",
-    "ずっと": "terus-menerus / selamanya",
-    "もっと": "lebih (lagi)",
-    "もう": "sudah / lagi",
-    "まだ": "masih / belum",
-    "いつか": "suatu saat nanti",
-    "きっと": "pasti / yakin",
-    "たぶん": "mungkin",
-    "少し": "sedikit",
-    "すこし": "sedikit",
-    "たくさん": "banyak",
-    "ゆっくり": "perlahan-lahan / santai",
-    "すぐに": "segera / langsung",
-    "突然": "tiba-tiba",
-    "とつぜん": "tiba-tiba",
-    "本当に": "benar-benar / sungguh",
-    "ほんとうに": "benar-benar",
-    "どうして": "mengapa / kenapa",
-    "なぜ": "mengapa",
-    "何": "apa",
-    "なに": "apa",
-    "なん": "apa",
-    "どこか": "suatu tempat",
-    "いつでも": "kapan pun",
-    "どこでも": "di mana pun",
-    "何も": "apa pun (tidak ada yang...)",
-    "なにも": "apa pun",
-    "何度": "berkali-kali",
-    "なんど": "berkali-kali",
-    "初めて": "pertama kali",
-    "はじめて": "pertama kali",
-    "最後": "terakhir",
-    "さいご": "terakhir",
-    "最初": "awal / mula-mula",
-    "さいしょ": "awal",
-    "ただ": "hanya / cuma",
-    "さあ": "ayo / mari",
-    "ああ": "ah / oh (seruan)",
-    "そう": "begitu / demikian",
-};
+// ---------------------------------------------------------------------------
+// Main Public API
+// ---------------------------------------------------------------------------
 
 /**
- * Looks up the meaning of a Japanese phrase from the local built-in dictionary
- * with smart fallback across dictionary_form, surface_form, reading, and particles.
+ * Looks up the Indonesian meaning of a Japanese phrase using:
+ *   1. Grammar particles table (always Indonesian, instant)
+ *   2. MongoDB dictionary_cache (previously translated/cached)
+ *   3. JMdict in-memory index → English meaning
+ *      a. Groq AI translates English → Indonesian (async, may fail)
+ *      b. If Groq fails/limit → save English meaning as fallback (not null)
+ *      c. Result cached to MongoDB for future lookups
  */
 export async function lookupPhraseMeaning(phrase: {
     surface_form?: string;
@@ -524,47 +228,53 @@ export async function lookupPhraseMeaning(phrase: {
     const surfaceForm = (phrase.surface_form || "").trim();
     const reading = (phrase.reading || "").trim();
 
-    // 1. Check in Core Vocabulary (dictionary form is most accurate)
-    if (dictForm && CORE_VOCABULARY_JA_ID[dictForm]) {
-        return CORE_VOCABULARY_JA_ID[dictForm];
-    }
-    if (surfaceForm && CORE_VOCABULARY_JA_ID[surfaceForm]) {
-        return CORE_VOCABULARY_JA_ID[surfaceForm];
-    }
-    if (reading && CORE_VOCABULARY_JA_ID[reading]) {
-        return CORE_VOCABULARY_JA_ID[reading];
+    const candidates = [dictForm, surfaceForm, reading].filter(Boolean);
+    if (candidates.length === 0) return null;
+
+    // 1. Grammar particles – instant, always Indonesian
+    for (const c of candidates) {
+        if (GRAMMAR_PARTICLES_ID[c]) return GRAMMAR_PARTICLES_ID[c];
     }
 
-    // 2. Check in Grammar & Particle dictionary
-    if (dictForm && GRAMMAR_PARTICLES_ID[dictForm]) {
-        return GRAMMAR_PARTICLES_ID[dictForm];
-    }
-    if (surfaceForm && GRAMMAR_PARTICLES_ID[surfaceForm]) {
-        return GRAMMAR_PARTICLES_ID[surfaceForm];
+    // 2. MongoDB dictionary_cache – previous translations
+    for (const c of candidates) {
+        const cached = await getCachedMeaning(c);
+        if (cached) return cached;
     }
 
-    // 3. Check in persistent MongoDB dictionary_cache (words discovered/cached previously)
-    try {
-        const db = getDB();
-        const candidateKeys = [dictForm, surfaceForm].filter(Boolean);
-        if (candidateKeys.length > 0) {
-            const cached = await db.collection("dictionary_cache").findOne({
-                word: { $in: candidateKeys }
-            });
-            if (cached && cached.meaning) {
-                return cached.meaning;
-            }
+    // 3. JMdict index – get English meaning
+    const jmdict = await getJmdictIndex();
+    let englishMeaning: string | null = null;
+    let matchedWord: string = dictForm || surfaceForm;
+
+    for (const c of candidates) {
+        const found = jmdict.get(c);
+        if (found) {
+            englishMeaning = found;
+            matchedWord = c;
+            break;
         }
-    } catch {
-        // DB not connected yet or running outside express context, ignore
     }
 
-    return null;
+    if (!englishMeaning) return null;
+
+    // 3a. Try translating English → Indonesian via Groq AI
+    const indonesianMeaning = await translateEnToId(englishMeaning, matchedWord);
+
+    if (indonesianMeaning) {
+        // Cache Indonesian result
+        await saveMeaningToCache(matchedWord, englishMeaning, indonesianMeaning);
+        return indonesianMeaning;
+    }
+
+    // 3b. Groq failed / rate-limited → use English meaning as fallback (not null)
+    await saveMeaningToCache(matchedWord, englishMeaning);
+    return englishMeaning;
 }
 
 /**
  * Batch lookup meanings for a collection of phrases.
- * Returns a map of token -> Indonesian meaning.
+ * Returns a Map of token → meaning (Indonesian if Groq available, English otherwise).
  */
 export async function batchLookupPhraseMeanings(phrases: Array<{
     surface_form?: string;
@@ -575,11 +285,24 @@ export async function batchLookupPhraseMeanings(phrases: Array<{
     const results = new Map<string, string>();
     if (!phrases || phrases.length === 0) return results;
 
-    for (const p of phrases) {
+    // Pre-load JMdict index once for the whole batch
+    await getJmdictIndex();
+
+    // Deduplicate by dictionary_form to avoid redundant lookups + translations
+    const seen = new Set<string>();
+    const uniquePhrases = phrases.filter((p) => {
+        const key = p.dictionary_form || p.surface_form || "";
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+
+    for (const p of uniquePhrases) {
         const meaning = await lookupPhraseMeaning(p);
         if (meaning) {
             if (p.dictionary_form) results.set(p.dictionary_form.trim(), meaning);
             if (p.surface_form) results.set(p.surface_form.trim(), meaning);
+            if (p.reading) results.set(p.reading.trim(), meaning);
         }
     }
 

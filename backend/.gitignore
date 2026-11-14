@@ -4,3 +4,9 @@ node_modules/*
 dist/
 prototype/
 bin/
+
+# JMdict dictionary data (large binary/JSON files, download via scripts/init-jmdict.js)
+data/jmdict/*.json
+data/jmdict/*.zip
+data/jmdict/*.tgz
+data/jmdict/db/
