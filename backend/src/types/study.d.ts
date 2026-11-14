@@ -29,6 +29,7 @@ export interface IUserPhraseStats {
     ease_factor: number;
     next_review_at: Date;
     last_rating: SRSGradeRating;
+    weight?: number;
     updated_at: Date;
 }
 
@@ -40,6 +41,7 @@ export interface IStudyCard {
     romaji?: string;
     romanization?: string;
     part_of_speech?: string;
+    weight?: number;
     meaning?: string | null;
     lyric_row_id: string | number;
     row_order: number;

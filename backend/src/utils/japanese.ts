@@ -17,6 +17,52 @@ const POS_MAP: Record<string, string> = {
 };
 
 /**
+ * Priority weights for each Part of Speech (higher weight = higher priority for vocabulary learning).
+ * Scale 1-10:
+ * - 10: Verbs & Nouns (Core action & subject/object vocabulary)
+ * - 8:  Adjectives (Nuances, emotions, descriptions)
+ * - 7:  Adverbs (Degree, manner, frequency)
+ * - 5:  Pre-noun Adjectivals (kono, sono, ano)
+ * - 4:  Conjunctions (soshite, demo, dakara)
+ * - 3:  Auxiliary Verbs (desu, masu, nai, ta)
+ * - 2:  Particles (wa, ga, o, ni, de, no - frequent grammatical markers)
+ * - 1:  Interjections & others (aa, un, nee - emotional exclamations)
+ */
+export const POS_WEIGHTS: Record<string, number> = {
+    "Verb": 10,
+    "Noun": 10,
+    "Adjective": 8,
+    "Adverb": 7,
+    "Pre-noun Adjectival": 5,
+    "Conjunction": 4,
+    "Auxiliary Verb": 3,
+    "Particle": 2,
+    "Interjection": 1
+};
+
+export function getPhraseWeight(pos?: string | null): number {
+    if (!pos) return 1;
+    const cleanPos = pos.trim();
+    for (const [key, weight] of Object.entries(POS_WEIGHTS)) {
+        if (key.toLowerCase() === cleanPos.toLowerCase()) {
+            return weight;
+        }
+    }
+    // Check Japanese POS names if passed directly
+    if (cleanPos.includes("動詞") && !cleanPos.includes("助動詞")) return 10;
+    if (cleanPos.includes("名詞")) return 10;
+    if (cleanPos.includes("形容詞")) return 8;
+    if (cleanPos.includes("副詞")) return 7;
+    if (cleanPos.includes("連体詞")) return 5;
+    if (cleanPos.includes("接続詞")) return 4;
+    if (cleanPos.includes("助動詞")) return 3;
+    if (cleanPos.includes("助詞")) return 2;
+    if (cleanPos.includes("感動詞")) return 1;
+
+    return 1;
+}
+
+/**
  * Validates whether a phrase is a meaningful linguistic token for flashcard study,
  * rejecting empty strings, standalone punctuation, pure symbols, or standalone choonpu marks.
  */
@@ -97,6 +143,7 @@ export async function tokenizeJapaneseBatch(lines: string[]): Promise<IPhrase[][
             const hiraganaReading = wanakana.toHiragana(rawReading);
             const romaji = wanakana.toRomaji(hiraganaReading);
             const posEnglish = POS_MAP[posPrimary] || posPrimary;
+            const weight = getPhraseWeight(posEnglish);
 
             phrases.push({
                 surface_form: surface,
@@ -104,6 +151,7 @@ export async function tokenizeJapaneseBatch(lines: string[]): Promise<IPhrase[][
                 reading: hiraganaReading,
                 romaji: romaji,
                 part_of_speech: posEnglish,
+                weight: weight,
                 meaning: null,
                 word_order: wordOrder++
             });

@@ -14,7 +14,7 @@ import {
     StudySessionBody
 } from "../types/study";
 import { IUser } from "../types/auth";
-import { isMeaningfulPhrase } from "../utils/japanese";
+import { getPhraseWeight, isMeaningfulPhrase } from "../utils/japanese";
 
 const StudyRouter = express.Router();
 
@@ -132,6 +132,7 @@ StudyRouter.post("/session", async (req: Request, res: Response) => {
                     }
 
                     const phraseId = p.phrase_id || p.id || `p_${song._id}_${row.row_order || rIdx + 1}_${p.word_order || pIdx + 1}`;
+                    const phraseWeight = p.weight || getPhraseWeight(p.part_of_speech);
 
                     candidateCards.push({
                         phrase_id: phraseId,
@@ -143,6 +144,7 @@ StudyRouter.post("/session", async (req: Request, res: Response) => {
                             romaji: p.romaji,
                             romanization: p.romanization || p.romaji,
                             part_of_speech: p.part_of_speech,
+                            weight: phraseWeight,
                             meaning: p.meaning,
                             lyric_row_id: row.id || row.row_order || rIdx + 1,
                             row_order: row.row_order || rIdx + 1,
@@ -183,9 +185,9 @@ StudyRouter.post("/session", async (req: Request, res: Response) => {
         // Attach stats and filter for cards due for review
         const dueCards: Array<{
             card: IStudyCard;
+            priority_score: number;
             next_review_at: Date | null;
             row_order: number;
-            word_order: number;
         }> = [];
 
         for (const item of candidateCards) {
@@ -196,27 +198,45 @@ StudyRouter.post("/session", async (req: Request, res: Response) => {
                 item.card.ease_factor = stats.ease_factor;
                 item.card.next_review_at = stats.next_review_at;
                 item.card.last_rating = stats.last_rating;
+                if (stats.weight) item.card.weight = stats.weight;
             }
 
             // A card is due if it has never been reviewed or review date has passed
             const isDue = !stats?.next_review_at || new Date(stats.next_review_at) <= now;
             if (isDue) {
+                const nextReviewDate = stats?.next_review_at ? new Date(stats.next_review_at) : null;
+                const weight = item.card.weight || 1;
+
+                // Priority score:
+                // High-value vocabulary (Verbs/Nouns: 10, Adjectives: 8, Adverbs: 7) are strongly
+                // prioritized over grammatical markers (Particles: 2, Interjections: 1).
+                let priorityScore: number;
+                if (!nextReviewDate) {
+                    // New unreviewed cards: score directly proportional to vocabulary value (10 to 100)
+                    priorityScore = weight * 10;
+                } else {
+                    // Cards due for review: base 100 ensures scheduled memory reviews are sustained,
+                    // plus hours overdue bonus (max 50), plus vocabulary weight bonus (5 to 50)
+                    const overdueHours = Math.max(0, (now.getTime() - nextReviewDate.getTime()) / (1000 * 60 * 60));
+                    const overdueBonus = Math.min((overdueHours / 24) * 10, 50);
+                    priorityScore = 100 + overdueBonus + (weight * 5);
+                }
+
                 dueCards.push({
                     card: item.card,
-                    next_review_at: stats?.next_review_at ? new Date(stats.next_review_at) : null,
-                    row_order: item.card.row_order,
-                    word_order: 0
+                    priority_score: priorityScore,
+                    next_review_at: nextReviewDate,
+                    row_order: item.card.row_order
                 });
             }
         }
 
-        // Sort: unreviewed first (null), then earliest next_review_at, then row order
+        // Sort by priority score descending:
+        // Highest weighted vocabulary and most urgent due cards appear first!
+        // If priority scores tie, preserve chronological lyric row order.
         dueCards.sort((a, b) => {
-            if (!a.next_review_at && b.next_review_at) return -1;
-            if (a.next_review_at && !b.next_review_at) return 1;
-            if (a.next_review_at && b.next_review_at) {
-                const diff = a.next_review_at.getTime() - b.next_review_at.getTime();
-                if (diff !== 0) return diff;
+            if (b.priority_score !== a.priority_score) {
+                return b.priority_score - a.priority_score;
             }
             return a.row_order - b.row_order;
         });
@@ -320,6 +340,21 @@ StudyRouter.post("/review", async (req: Request, res: Response) => {
         const currentInterval = currentStats?.interval_days || 1.0;
         const currentEf = currentStats?.ease_factor || 2.5;
 
+        // Resolve phrase weight
+        let phraseWeight = currentStats?.weight;
+        if (!phraseWeight) {
+            const songDoc = await db.collection<ISong>("songs").findOne(
+                { "lyric_rows.phrases.phrase_id": phrase_id },
+                { projection: { "lyric_rows.phrases.$": 1 } }
+            );
+            const foundPhrase = songDoc?.lyric_rows?.[0]?.phrases?.[0];
+            if (foundPhrase) {
+                phraseWeight = foundPhrase.weight || getPhraseWeight(foundPhrase.part_of_speech);
+            } else {
+                phraseWeight = 5;
+            }
+        }
+
         // SuperMemo SM-2 Calculation
         let newEf = currentEf + (0.1 - (5 - grade) * (0.08 + (5 - grade) * 0.02));
         newEf = Math.max(1.3, Number(newEf.toFixed(2)));
@@ -349,7 +384,16 @@ StudyRouter.post("/review", async (req: Request, res: Response) => {
             }
         }
 
-        newInterval = Number(newInterval.toFixed(1));
+        // Weight-based interval pacing:
+        // Lower weight phrases (particles, interjections, weight <= 2) expand intervals faster (1.5x),
+        // preventing them from cluttering upcoming study sessions.
+        // Higher weight vocabulary (verbs, nouns, adjectives) keeps tighter intervals so they appear more frequently.
+        if (newReps > 0 && phraseWeight <= 2) {
+            newInterval = Number((newInterval * 1.5).toFixed(1));
+        } else {
+            newInterval = Number(newInterval.toFixed(1));
+        }
+
         const nextReviewAt = new Date(Date.now() + newInterval * 24 * 60 * 60 * 1000);
 
         // Upsert user phrase stats
@@ -365,6 +409,7 @@ StudyRouter.post("/review", async (req: Request, res: Response) => {
                     ease_factor: newEf,
                     next_review_at: nextReviewAt,
                     last_rating: rating,
+                    weight: phraseWeight,
                     updated_at: now
                 }
             },
@@ -389,6 +434,7 @@ StudyRouter.post("/review", async (req: Request, res: Response) => {
                 phrase_id: phrase_id,
                 session_id: session_id,
                 rating: rating,
+                weight: phraseWeight,
                 repetition_count: newReps,
                 interval_days: newInterval,
                 ease_factor: newEf,

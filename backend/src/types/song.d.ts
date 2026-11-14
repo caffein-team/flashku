@@ -9,6 +9,7 @@ export interface IPhrase {
     romaji: string;
     romanization?: string;
     part_of_speech?: string;
+    weight?: number;
     meaning?: string | null;
     word_order: number;
 }
