@@ -194,19 +194,43 @@ export async function enrichBatchWithAi(
         userPayload.words_to_translate = tokensList;
     }
 
-    try {
-        const groq = getGroqClient(config.apiKey, config.baseUrl, config.proxyUrl);
-        const completion = await groq.chat.completions.create({
-            model: config.model,
-            messages: [
-                { role: "system", content: systemInstruction },
-                { role: "user", content: "Data:\n" + JSON.stringify(userPayload) }
-            ],
-            response_format: { type: "json_object" },
-            temperature: 0.2
-        });
+    const groq = getGroqClient(config.apiKey, config.baseUrl, config.proxyUrl);
+    let attempts = 0;
+    const maxAttempts = 3;
+    let completion: any = null;
 
-        const content = completion.choices?.[0]?.message?.content || "";
+    // Calculate maximum output tokens dynamically to stay within the model's OTPM limit (e.g. 1000 for qwen)
+    const maxOutputTokens = Math.min(Math.max(batchRows.length * 85 + 200, 350), 750);
+
+    while (attempts < maxAttempts) {
+        attempts++;
+        try {
+            completion = await groq.chat.completions.create({
+                model: config.model,
+                messages: [
+                    { role: "system", content: systemInstruction },
+                    { role: "user", content: "Data:\n" + JSON.stringify(userPayload) }
+                ],
+                response_format: { type: "json_object" },
+                max_tokens: maxOutputTokens,
+                temperature: 0.2
+            });
+            break;
+        } catch (err: any) {
+            const isRateLimit = err?.status === 429 || err?.statusCode === 429 || String(err).includes("429");
+            if (isRateLimit && attempts < maxAttempts) {
+                const waitMs = attempts * 3500;
+                console.warn(`[Groq AI Rate Limit] 429 received, waiting ${waitMs}ms before retry (attempt ${attempts}/${maxAttempts})...`);
+                await new Promise((resolve) => setTimeout(resolve, waitMs));
+                continue;
+            }
+            console.error("[Groq AI Exception]:", err?.status || err?.statusCode || "", err?.message || err);
+            return { row_translations: {}, vocabulary_meanings: {} };
+        }
+    }
+
+    try {
+        const content = completion?.choices?.[0]?.message?.content || "";
         let cleanText = content.trim();
         if (cleanText.startsWith("```json")) cleanText = cleanText.substring(7);
         else if (cleanText.startsWith("```")) cleanText = cleanText.substring(3);

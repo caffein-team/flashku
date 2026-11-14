@@ -487,7 +487,7 @@ SongRouter.post("/:id/enrich-ai", async (req: Request, res: Response) => {
             "なら": "jika memang / kalau"
         };
 
-        const chunkSize = 20;
+        const chunkSize = 6;
         let totalTranslations = 0;
         let totalMeanings = 0;
 
@@ -549,6 +549,11 @@ SongRouter.post("/:id/enrich-ai", async (req: Request, res: Response) => {
                         }
                     }
                 }
+            }
+
+            // Pacing delay between batches to stay comfortably within Groq rate limits (OTPM / TPM)
+            if (i + chunkSize < rows_to_enrich.length) {
+                await new Promise((resolve) => setTimeout(resolve, 1200));
             }
         }
 
