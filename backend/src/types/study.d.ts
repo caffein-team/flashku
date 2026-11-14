@@ -30,6 +30,7 @@ export interface IUserPhraseStats {
     next_review_at: Date;
     last_rating: SRSGradeRating;
     weight?: number;
+    lapse_count?: number;
     updated_at: Date;
 }
 
@@ -60,6 +61,7 @@ export interface IStudyCard {
     ease_factor: number;
     next_review_at?: Date | null;
     last_rating?: string | null;
+    lapse_count?: number;
 }
 
 export interface StudySessionBody {

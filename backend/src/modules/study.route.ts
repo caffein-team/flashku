@@ -199,6 +199,7 @@ StudyRouter.post("/session", async (req: Request, res: Response) => {
                 item.card.next_review_at = stats.next_review_at;
                 item.card.last_rating = stats.last_rating;
                 if (stats.weight) item.card.weight = stats.weight;
+                if (stats.lapse_count) item.card.lapse_count = stats.lapse_count;
             }
 
             // A card is due if it has never been reviewed or review date has passed
@@ -208,18 +209,39 @@ StudyRouter.post("/session", async (req: Request, res: Response) => {
                 const weight = item.card.weight || 1;
 
                 // Priority score:
-                // High-value vocabulary (Verbs/Nouns: 10, Adjectives: 8, Adverbs: 7) are strongly
-                // prioritized over grammatical markers (Particles: 2, Interjections: 1).
+                // High-value vocabulary (Verbs/Nouns: 10, Adjectives: 8, Adverbs: 7) and cards that
+                // the user finds difficult (again/hard/low EF/high lapses) are prioritized to appear frequently.
                 let priorityScore: number;
                 if (!nextReviewDate) {
                     // New unreviewed cards: score directly proportional to vocabulary value (10 to 100)
                     priorityScore = weight * 10;
                 } else {
-                    // Cards due for review: base 100 ensures scheduled memory reviews are sustained,
-                    // plus hours overdue bonus (max 50), plus vocabulary weight bonus (5 to 50)
+                    // Cards due for review: base 100 ensures scheduled memory reviews are sustained
+                    let difficultyBoost = 0;
+                    const lastRating = stats?.last_rating;
+                    if (lastRating === "again") {
+                        difficultyBoost += 60; // Cards failed on last attempt get highest priority to reappear!
+                    } else if (lastRating === "hard") {
+                        difficultyBoost += 35; // Cards marked difficult get strong priority boost
+                    } else if (lastRating === "easy") {
+                        difficultyBoost -= 15; // Easy cards yield priority to harder cards
+                    }
+
+                    // Historical difficulty bonus: low ease factor (< 2.5) or frequent lapses
+                    const currentEf = stats?.ease_factor || 2.5;
+                    if (currentEf < 2.5) {
+                        difficultyBoost += Math.round((2.5 - currentEf) * 20); // up to +24 for EF 1.3
+                    }
+                    const lapses = stats?.lapse_count || 0;
+                    if (lapses > 0) {
+                        difficultyBoost += Math.min(lapses * 10, 40); // up to +40 for persistent trouble words
+                    }
+
+                    // Hours overdue bonus
                     const overdueHours = Math.max(0, (now.getTime() - nextReviewDate.getTime()) / (1000 * 60 * 60));
                     const overdueBonus = Math.min((overdueHours / 24) * 10, 50);
-                    priorityScore = 100 + overdueBonus + (weight * 5);
+
+                    priorityScore = 100 + difficultyBoost + overdueBonus + (weight * 5);
                 }
 
                 dueCards.push({
@@ -361,21 +383,28 @@ StudyRouter.post("/review", async (req: Request, res: Response) => {
 
         let newReps: number;
         let newInterval: number;
+        let newLapseCount = currentStats?.lapse_count || 0;
 
         if (grade < 3) {
-            // "again" - reset repetitions and interval to 1 day
+            // "again" - user struggled or failed to recall the phrase:
+            // Reset repetitions, increment lapse count, and set tight interval (0.25 day = 6 hours)
+            // so this difficult card is ready to be practiced again promptly!
             newReps = 0;
-            newInterval = 1.0;
+            newInterval = 0.25;
+            newLapseCount += 1;
         } else {
             newReps = currentReps + 1;
             if (newReps === 1) {
-                newInterval = rating === "easy" ? 2.0 : 1.0;
+                // Repetition 1: "hard" reviews sooner (0.8 day); "good": 1 day; "easy": 2 days
+                newInterval = rating === "hard" ? 0.8 : (rating === "easy" ? 2.0 : 1.0);
             } else if (newReps === 2) {
-                newInterval = rating === "hard" ? 4.0 : (rating === "easy" ? 8.0 : 6.0);
+                // Repetition 2: "hard": 2.5 days (vs good: 6 days, easy: 8 days)
+                newInterval = rating === "hard" ? 2.5 : (rating === "easy" ? 8.0 : 6.0);
             } else {
                 const baseInterval = currentInterval * newEf;
                 if (rating === "hard") {
-                    newInterval = Math.max(baseInterval * 0.8, 1.5);
+                    // Difficult cards: shorter interval multiplier (0.7x) to ensure frequent review
+                    newInterval = Math.max(baseInterval * 0.7, 1.2);
                 } else if (rating === "easy") {
                     newInterval = baseInterval * 1.3;
                 } else {
@@ -385,10 +414,9 @@ StudyRouter.post("/review", async (req: Request, res: Response) => {
         }
 
         // Weight-based interval pacing:
-        // Lower weight phrases (particles, interjections, weight <= 2) expand intervals faster (1.5x),
-        // preventing them from cluttering upcoming study sessions.
-        // Higher weight vocabulary (verbs, nouns, adjectives) keeps tighter intervals so they appear more frequently.
-        if (newReps > 0 && phraseWeight <= 2) {
+        // Lower weight phrases (particles, interjections, weight <= 2) expand intervals faster (1.5x)
+        // only when remembered well ("good" / "easy"). If difficult ("again" / "hard"), keep tight intervals!
+        if (newReps > 0 && phraseWeight <= 2 && !["again", "hard"].includes(rating)) {
             newInterval = Number((newInterval * 1.5).toFixed(1));
         } else {
             newInterval = Number(newInterval.toFixed(1));
@@ -410,6 +438,7 @@ StudyRouter.post("/review", async (req: Request, res: Response) => {
                     next_review_at: nextReviewAt,
                     last_rating: rating,
                     weight: phraseWeight,
+                    lapse_count: newLapseCount,
                     updated_at: now
                 }
             },
@@ -438,6 +467,7 @@ StudyRouter.post("/review", async (req: Request, res: Response) => {
                 repetition_count: newReps,
                 interval_days: newInterval,
                 ease_factor: newEf,
+                lapse_count: newLapseCount,
                 next_review_at: nextReviewAt,
                 xp_earned: xpEarned,
                 user_level: userLevel
