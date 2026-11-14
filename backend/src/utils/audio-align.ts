@@ -69,12 +69,19 @@ function getGroqClient(useProxy = true): Groq {
         }
     }
 
+    const customFetch = dispatcher
+        ? ((url: any, init: any) => undiciFetch(url, { ...init, dispatcher }))
+        : undefined;
+    if (customFetch) {
+        (customFetch as any).Response = (globalThis as any).Response;
+    }
+
     return new Groq({
         apiKey,
         ...(baseUrl ? { baseURL: baseUrl } : {}),
         maxRetries: 1,
-        timeout: 25000,
-        ...(dispatcher ? { fetch: undiciFetch as any, fetchOptions: { dispatcher } as any } : {})
+        timeout: 30000,
+        ...(customFetch ? { fetch: customFetch as any } : {})
     });
 }
 
@@ -121,10 +128,13 @@ export async function alignLyricsWithWhisper(
             return { aligned_rows: lyricRows, offset_seconds: 0, detected: false };
         }
 
-        // 2. Call Groq Whisper transcription (with proxy fallback to direct if proxy is unreachable)
+        // 2. Call Groq Whisper transcription (using Groq.toFile to support undici and avoid stream exhaustion)
         let transcription: any;
+        const audioBuffer = fs.readFileSync(tempSample);
+        const fileObj = await Groq.toFile(audioBuffer, "sample.mp3");
+
         const requestBody = {
-            file: fs.createReadStream(tempSample),
+            file: fileObj,
             model: "whisper-large-v3-turbo" as const,
             response_format: "verbose_json" as const,
             timestamp_granularities: ["word", "segment"] as Array<"word" | "segment">,
@@ -135,14 +145,22 @@ export async function alignLyricsWithWhisper(
             const client = getGroqClient(true);
             transcription = await client.audio.transcriptions.create(requestBody);
         } catch (callErr: any) {
-            // If proxy connection error, retry directly without proxy
+            console.warn(`[Audio Align]: Whisper call via proxy failed (${callErr?.message || callErr})`);
             if (process.env.GROQ_PROXY) {
-                console.warn("[Audio Align]: Proxy failed, retrying Whisper directly without proxy...");
-                const directClient = getGroqClient(false);
-                requestBody.file = fs.createReadStream(tempSample);
-                transcription = await directClient.audio.transcriptions.create(requestBody);
+                console.warn("[Audio Align]: Retrying Whisper directly without proxy...");
+                try {
+                    const directClient = getGroqClient(false);
+                    const directFileObj = await Groq.toFile(audioBuffer, "sample.mp3");
+                    transcription = await directClient.audio.transcriptions.create({
+                        ...requestBody,
+                        file: directFileObj
+                    });
+                } catch (directErr: any) {
+                    console.warn(`[Audio Align Warning]: Whisper alignment failed: ${directErr?.status || directErr?.statusCode || ""} ${directErr?.message || directErr}`);
+                    return { aligned_rows: lyricRows, offset_seconds: 0, detected: false };
+                }
             } else {
-                throw callErr;
+                return { aligned_rows: lyricRows, offset_seconds: 0, detected: false };
             }
         }
 

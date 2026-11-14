@@ -48,12 +48,19 @@ function getGroqClient(apiKey: string, baseUrl?: string, proxyUrl?: string): Gro
         }
     }
 
+    const customFetch = dispatcher
+        ? ((url: any, init: any) => undiciFetch(url, { ...init, dispatcher }))
+        : undefined;
+    if (customFetch) {
+        (customFetch as any).Response = (globalThis as any).Response;
+    }
+
     return new Groq({
         apiKey,
         ...(baseUrl ? { baseURL: baseUrl } : {}),
         maxRetries: 2,
         timeout: 25000,
-        ...(dispatcher ? { fetch: undiciFetch as any, fetchOptions: { dispatcher } as any } : {})
+        ...(customFetch ? { fetch: customFetch as any } : {})
     });
 }
 
@@ -198,15 +205,16 @@ export async function enrichBatchWithAi(
     let attempts = 0;
     const maxAttempts = 3;
     let completion: any = null;
+    let currentModel = config.model;
 
-    // Calculate maximum output tokens dynamically to stay within the model's OTPM limit (e.g. 1000 for qwen)
-    const maxOutputTokens = Math.min(Math.max(batchRows.length * 85 + 200, 350), 750);
+    // Calculate maximum output tokens dynamically to stay comfortably within Groq OTPM limits
+    const maxOutputTokens = Math.min(Math.max(batchRows.length * 55 + 120, 200), 450);
 
     while (attempts < maxAttempts) {
         attempts++;
         try {
             completion = await groq.chat.completions.create({
-                model: config.model,
+                model: currentModel,
                 messages: [
                     { role: "system", content: systemInstruction },
                     { role: "user", content: "Data:\n" + JSON.stringify(userPayload) }
@@ -219,7 +227,25 @@ export async function enrichBatchWithAi(
         } catch (err: any) {
             const isRateLimit = err?.status === 429 || err?.statusCode === 429 || String(err).includes("429");
             if (isRateLimit && attempts < maxAttempts) {
-                const waitMs = attempts * 3500;
+                const rawMessage = err?.error?.error?.message || err?.error?.message || err?.message || String(err);
+
+                // If current model hit OTPM limit (e.g. qwen's 1000 OTPM ceiling), fallback to high-capacity models
+                const fallbackModels = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"];
+                const nextFallback = fallbackModels.find((m) => m !== currentModel);
+
+                if (nextFallback) {
+                    console.warn(`[Groq AI Rate Limit] 429 received on ${currentModel}. Switching fallback model to ${nextFallback}...`);
+                    currentModel = nextFallback;
+                    await new Promise((resolve) => setTimeout(resolve, 1000));
+                    continue;
+                }
+
+                // If all fallback models exhausted or retry-after specified, parse wait seconds from Groq message
+                const match = String(rawMessage).match(/try again in ([\d.]+)s/i);
+                const waitMs = match
+                    ? Math.min(Math.ceil(parseFloat(match[1]) * 1000) + 1500, 35000)
+                    : attempts * 4000;
+
                 console.warn(`[Groq AI Rate Limit] 429 received, waiting ${waitMs}ms before retry (attempt ${attempts}/${maxAttempts})...`);
                 await new Promise((resolve) => setTimeout(resolve, waitMs));
                 continue;
