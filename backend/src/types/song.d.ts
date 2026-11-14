@@ -20,6 +20,8 @@ export interface ILyricRow {
     raw_text: string;
     start_time: number;
     end_time: number;
+    romaji?: string | null;
+    romanization?: string | null;
     translation?: string | null;
     phrases: IPhrase[];
 }

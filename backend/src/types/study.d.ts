@@ -47,6 +47,8 @@ export interface IStudyCard {
     lyric_row_id: string | number;
     row_order: number;
     raw_text: string;
+    row_romaji?: string | null;
+    row_romanization?: string | null;
     start_time: number;
     end_time: number;
     translation?: string | null;

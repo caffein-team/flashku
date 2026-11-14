@@ -144,19 +144,198 @@ export function getTokenizer(): Promise<Tokenizer<any>> {
     return tokenizerPromise;
 }
 
-export async function tokenizeJapaneseBatch(lines: string[]): Promise<IPhrase[][]> {
+/**
+ * Converts Kuromoji tokens into naturally formatted Romaji with appropriate spacing and particle pronunciation.
+ */
+export function tokensToRomaji(tokens: any[]): string {
+    if (!tokens || tokens.length === 0) return "";
+
+    // Group tokens into word/bunsetsu units
+    const chunks: any[][] = [];
+    let currentChunk: any[] = [];
+
+    for (let i = 0; i < tokens.length; i++) {
+        const token = tokens[i];
+        const surface = token.surface_form || "";
+        const pos = token.pos || "";
+        const prev = tokens[i - 1];
+
+        if (!surface) continue;
+
+        // Pure whitespace
+        if (/^\s+$/.test(surface)) {
+            if (currentChunk.length > 0) {
+                chunks.push(currentChunk);
+                currentChunk = [];
+            }
+            chunks.push([{ surface_form: " ", pos: "SPACE" }]);
+            continue;
+        }
+
+        // Punctuation
+        if (/^[、。，．！？!?.,:;~…\-—'\"“”「」『』()（）\[\]]+$/.test(surface)) {
+            if (currentChunk.length > 0) {
+                chunks.push(currentChunk);
+                currentChunk = [];
+            }
+            chunks.push([token]);
+            continue;
+        }
+
+        // Decide whether to attach to currentChunk or start a new chunk
+        let attach = false;
+        if (currentChunk.length > 0 && prev) {
+            const prevPos = prev.pos;
+            const prevSurface = prev.surface_form || "";
+
+            // 1. Prefix attaches to following
+            if (prevPos === "接頭詞") {
+                attach = true;
+            }
+            // 2. Suffix attaches to previous
+            else if (pos === "接尾") {
+                attach = true;
+            }
+            // 3. Auxiliary verbs (助動詞) attach to previous verb, adjective, or auxiliary
+            else if (pos === "助動詞") {
+                attach = true;
+            }
+            // 4. Te/de particle attaching to verb/adjective
+            else if (pos === "助詞" && (surface === "て" || surface === "で" || surface === "ちゃ" || surface === "じゃ") && (prevPos === "動詞" || prevPos === "形容詞" || prevPos === "助動詞")) {
+                attach = true;
+            }
+            // 5. Verb followed by verb auxiliary / compound helper (e.g. 食べ + て + いる, 行き + ます)
+            else if (pos === "動詞" && (surface === "い" || surface === "いる" || surface === "おる" || surface === "ある" || surface === "おく" || surface === "みる" || surface === "ゆく" || surface === "いく" || surface === "たい" || surface === "ない") && (prevSurface === "て" || prevSurface === "で" || prevPos === "動詞")) {
+                attach = true;
+            }
+            // 6. Phonetic glides (small tsu or trailing n)
+            else if (prevSurface.endsWith("っ") || prevSurface.endsWith("ッ")) {
+                attach = true;
+            }
+        }
+
+        if (attach) {
+            currentChunk.push(token);
+        } else {
+            if (currentChunk.length > 0) {
+                chunks.push(currentChunk);
+            }
+            currentChunk = [token];
+        }
+    }
+    if (currentChunk.length > 0) {
+        chunks.push(currentChunk);
+    }
+
+    // Convert each chunk to romaji
+    const chunkStrings = chunks.map((chunk) => {
+        if (chunk.length === 1 && chunk[0].pos === "SPACE") return " ";
+
+        const first = chunk[0];
+        // If punctuation, normalize common Japanese punctuation
+        if (/^[、。，．！？!?.,:;~…\-—'\"“”「」『』()（）\[\]]+$/.test(first.surface_form)) {
+            return first.surface_form
+                .replace(/、/g, ", ")
+                .replace(/。/g, ".")
+                .replace(/！/g, "!")
+                .replace(/？/g, "?")
+                .replace(/「/g, '"')
+                .replace(/」/g, '"')
+                .replace(/『/g, '"')
+                .replace(/』/g, '"');
+        }
+
+        // Check if any token in this chunk has Japanese characters
+        const hasJapanese = chunk.some((t) => /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}]/u.test(t.surface_form || ""));
+        if (!hasJapanese) {
+            return chunk.map((t) => t.surface_form).join("");
+        }
+
+        // Build reading for this Japanese chunk
+        let readingStr = "";
+        for (const t of chunk) {
+            const surface = t.surface_form || "";
+            const isJa = /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}]/u.test(surface);
+            if (!isJa) {
+                readingStr += surface;
+            } else {
+                let r = t.reading && t.reading !== "*" ? t.reading : surface;
+                if (t.pos === "助詞") {
+                    if (surface === "は") r = "ワ";
+                    else if (surface === "へ") r = "エ";
+                    else if (surface === "を") r = "ヲ";
+                }
+                readingStr += r;
+            }
+        }
+
+        const hira = wanakana.toHiragana(readingStr);
+        return wanakana.toRomaji(hira);
+    });
+
+    // Format output with spacing
+    let result = "";
+    for (const str of chunkStrings) {
+        if (!str) continue;
+        if (str === " ") {
+            if (!result.endsWith(" ")) result += " ";
+            continue;
+        }
+        if (/^[,.!?]/.test(str)) {
+            result = result.trimEnd() + str;
+            continue;
+        }
+        if (/^[\"'\(\[]/.test(str)) {
+            if (result.length > 0 && !result.endsWith(" ")) result += " ";
+            result += str;
+            continue;
+        }
+        if (/^[\"')\]]/.test(str)) {
+            result = result.trimEnd() + str;
+            continue;
+        }
+
+        if (result.length > 0 && !result.endsWith(" ")) {
+            result += " ";
+        }
+        result += str;
+    }
+
+    return result.trim().replace(/\s{2,}/g, " ");
+}
+
+/**
+ * Converts a single Japanese string/line to romaji.
+ */
+export async function convertJapaneseTextToRomaji(text: string): Promise<string> {
+    if (!text || !text.trim()) return "";
+    const tokenizer = await getTokenizer();
+    const tokens = tokenizer.tokenize(text);
+    return tokensToRomaji(tokens);
+}
+
+export interface ITokenizedJapaneseLine {
+    romaji: string;
+    phrases: IPhrase[];
+}
+
+/**
+ * Tokenizes multiple lines of Japanese text, returning both line-level Romaji and tokenized vocabulary phrases.
+ */
+export async function tokenizeJapaneseLyrics(lines: string[]): Promise<ITokenizedJapaneseLine[]> {
     if (!lines || lines.length === 0) return [];
 
     const tokenizer = await getTokenizer();
-    const results: IPhrase[][] = [];
+    const results: ITokenizedJapaneseLine[] = [];
 
     for (const lineText of lines) {
         if (!lineText || !lineText.trim()) {
-            results.push([]);
+            results.push({ romaji: "", phrases: [] });
             continue;
         }
 
         const tokens = tokenizer.tokenize(lineText);
+        const lineRomaji = tokensToRomaji(tokens);
         const phrases: IPhrase[] = [];
         let wordOrder = 1;
 
@@ -188,8 +367,16 @@ export async function tokenizeJapaneseBatch(lines: string[]): Promise<IPhrase[][
             });
         }
 
-        results.push(phrases);
+        results.push({
+            romaji: lineRomaji,
+            phrases: phrases
+        });
     }
 
     return results;
+}
+
+export async function tokenizeJapaneseBatch(lines: string[]): Promise<IPhrase[][]> {
+    const detailed = await tokenizeJapaneseLyrics(lines);
+    return detailed.map((d) => d.phrases);
 }

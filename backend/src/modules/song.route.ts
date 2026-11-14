@@ -5,7 +5,7 @@ import { authenticateToken } from "../middlewares/auth.middleware";
 import { ILyricRow, ISong, IUserSong, SongImportBody, UpdateSongLyricsBody } from "../types/song";
 import { cleanTrackAndArtist, fetchLrcLibLyrics, parseLrc, parsePlainLyrics } from "../utils/lyrics";
 import { extractYouTubeId, fetchYouTubeData } from "../utils/youtube";
-import { isMeaningfulPhrase, tokenizeJapaneseBatch } from "../utils/japanese";
+import { convertJapaneseTextToRomaji, isMeaningfulPhrase, tokenizeJapaneseLyrics } from "../utils/japanese";
 import { checkAiQuotaStatus, enrichBatchWithAi } from "../utils/ai";
 
 const SongRouter = express.Router();
@@ -146,15 +146,18 @@ SongRouter.post("/import", async (req: Request, res: Response) => {
             ];
         }
 
-        // 4. Tokenize Japanese phrases for all lyric lines
+        // 4. Tokenize Japanese phrases and line-level romaji for all lyric lines
         if (target_lang === "ja" && parsed_rows.length > 0) {
             try {
                 const lineTexts = parsed_rows.map((row) => row.raw_text);
-                const tokenizedBatch = await tokenizeJapaneseBatch(lineTexts);
+                const tokenizedLines = await tokenizeJapaneseLyrics(lineTexts);
 
                 for (let i = 0; i < parsed_rows.length; i++) {
-                    const rawPhrases = tokenizedBatch[i] || [];
+                    const lineData = tokenizedLines[i];
+                    const rawPhrases = lineData?.phrases || [];
                     parsed_rows[i].id = `row_${i + 1}`;
+                    parsed_rows[i].romaji = lineData?.romaji || null;
+                    parsed_rows[i].romanization = lineData?.romaji || null;
                     parsed_rows[i].phrases = rawPhrases.map((p, pIdx) => {
                         const phraseId = `p_${youtube_id}_${i + 1}_${p.word_order || pIdx + 1}`;
                         return {
@@ -369,20 +372,35 @@ SongRouter.get("/:id", async (req: Request, res: Response) => {
             song_id: song_oid
         });
 
-        // Ensure phrases have phrase_id for consistent flashcard client usage
-        const lyric_rows = (song.lyric_rows || []).map((row, rIdx) => ({
-            ...row,
-            id: row.id || `row_${row.row_order || rIdx + 1}`,
-            phrases: (row.phrases || []).map((p, pIdx) => {
-                const pid = p.phrase_id || p.id || `p_${song._id}_${row.row_order || rIdx + 1}_${p.word_order || pIdx + 1}`;
+        // Ensure lyric rows have romaji and phrases have phrase_id for consistent client usage
+        const lyric_rows = await Promise.all(
+            (song.lyric_rows || []).map(async (row, rIdx) => {
+                let rowRomaji = row.romaji || row.romanization || null;
+                if (!rowRomaji && song.language === "ja" && row.raw_text) {
+                    try {
+                        rowRomaji = await convertJapaneseTextToRomaji(row.raw_text);
+                    } catch {
+                        rowRomaji = null;
+                    }
+                }
+
                 return {
-                    ...p,
-                    id: pid,
-                    phrase_id: pid,
-                    romanization: p.romanization || p.romaji
+                    ...row,
+                    id: row.id || `row_${row.row_order || rIdx + 1}`,
+                    romaji: rowRomaji,
+                    romanization: rowRomaji,
+                    phrases: (row.phrases || []).map((p, pIdx) => {
+                        const pid = p.phrase_id || p.id || `p_${song._id}_${row.row_order || rIdx + 1}_${p.word_order || pIdx + 1}`;
+                        return {
+                            ...p,
+                            id: pid,
+                            phrase_id: pid,
+                            romanization: p.romanization || p.romaji
+                        };
+                    })
                 };
             })
-        }));
+        );
 
         return res.status(200).json({
             status: "success",
@@ -707,15 +725,18 @@ SongRouter.put("/:id/lyrics", async (req: Request, res: Response) => {
             });
         }
 
-        // Re-tokenize phrases for Japanese lyrics
+        // Re-tokenize phrases and line-level romaji for Japanese lyrics
         if (song.language === "ja" && parsed_rows.length > 0) {
             try {
                 const lineTexts = parsed_rows.map((row) => row.raw_text);
-                const tokenizedBatch = await tokenizeJapaneseBatch(lineTexts);
+                const tokenizedLines = await tokenizeJapaneseLyrics(lineTexts);
 
                 for (let i = 0; i < parsed_rows.length; i++) {
-                    const rawPhrases = tokenizedBatch[i] || [];
+                    const lineData = tokenizedLines[i];
+                    const rawPhrases = lineData?.phrases || [];
                     parsed_rows[i].id = `row_${i + 1}`;
+                    parsed_rows[i].romaji = lineData?.romaji || null;
+                    parsed_rows[i].romanization = lineData?.romaji || null;
                     parsed_rows[i].phrases = rawPhrases.map((p, pIdx) => {
                         const phraseId = `p_${song._id}_${i + 1}_${p.word_order || pIdx + 1}`;
                         return {

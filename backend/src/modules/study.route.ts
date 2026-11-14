@@ -149,6 +149,8 @@ StudyRouter.post("/session", async (req: Request, res: Response) => {
                             lyric_row_id: row.id || row.row_order || rIdx + 1,
                             row_order: row.row_order || rIdx + 1,
                             raw_text: row.raw_text,
+                            row_romaji: row.romaji || row.romanization || null,
+                            row_romanization: row.romanization || row.romaji || null,
                             start_time: row.start_time,
                             end_time: row.end_time,
                             translation: row.translation,
