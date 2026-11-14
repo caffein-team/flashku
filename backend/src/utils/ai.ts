@@ -318,7 +318,7 @@ export interface DifficultyDecision {
     target_weight_min: number;
     target_weight_max: number;
     reasoning: string;
-    source: "ai" | "heuristic";
+    source: "ai" | "heuristic" | "session_history_fallback";
 }
 
 /**

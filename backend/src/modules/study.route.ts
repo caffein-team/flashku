@@ -308,50 +308,139 @@ StudyRouter.post("/session", async (req: Request, res: Response) => {
             ...todayAttempts.map((a) => a.phrase_id)
         ]);
 
-        const minW = difficultyDecision.target_weight_min;
-        const maxW = difficultyDecision.target_weight_max;
-
-        // Categorize candidate cards into priority tiers:
-        // 1. Unseen phrase + Different lyric row + Matches AI target difficulty
-        // 2. Unseen phrase + Different lyric row (flexible weight)
-        // 3. Different lyric row + Matches AI target difficulty
-        // 4. Matches AI target difficulty (same row fallback if limited)
-        // 5. Any candidate card
-        const tier1 = candidateCards.filter(
-            (c) =>
-                !seenPhraseIds.has(c.phrase_id) &&
-                !recentRowIds.has(String(c.lyric_row_id)) &&
-                c.weight >= minW &&
-                c.weight <= maxW
+        // Check if user has study history from previous sessions for these songs/phrases
+        const hasPreviousSongHistory = candidateCards.some(
+            (c) => (c.card.repetition_count && c.card.repetition_count > 0) || statsMap.has(c.phrase_id)
         );
 
-        const tier2 = candidateCards.filter(
-            (c) =>
-                !seenPhraseIds.has(c.phrase_id) &&
-                !recentRowIds.has(String(c.lyric_row_id))
-        );
+        // Categorize phrases based on user's past review history
+        const isHardPhrase = (c: typeof candidateCards[0]) => {
+            const s = statsMap.get(c.phrase_id);
+            if (!s) return false;
+            return (
+                s.last_rating === "again" ||
+                s.last_rating === "hard" ||
+                (s.lapse_count && s.lapse_count > 0) ||
+                (s.ease_factor && s.ease_factor < 2.3)
+            );
+        };
 
-        const tier3 = candidateCards.filter(
-            (c) =>
-                !recentRowIds.has(String(c.lyric_row_id)) &&
-                c.weight >= minW &&
-                c.weight <= maxW
-        );
+        const isEasyPhrase = (c: typeof candidateCards[0]) => {
+            const s = statsMap.get(c.phrase_id);
+            if (!s) return false;
+            return (
+                s.last_rating === "easy" ||
+                (s.last_rating === "good" && s.repetition_count >= 1) ||
+                (s.ease_factor && s.ease_factor >= 2.5 && s.repetition_count >= 1)
+            );
+        };
 
-        const tier4 = candidateCards.filter(
-            (c) => c.weight >= minW && c.weight <= maxW
-        );
+        const isUnmappedPhrase = (c: typeof candidateCards[0]) => {
+            const s = statsMap.get(c.phrase_id);
+            return !s || !s.repetition_count || s.repetition_count === 0;
+        };
 
-        const pool =
-            tier1.length > 0
-                ? tier1
-                : tier2.length > 0
-                ? tier2
-                : tier3.length > 0
-                ? tier3
-                : tier4.length > 0
-                ? tier4
-                : candidateCards;
+        let pool: typeof candidateCards = [];
+
+        // Fallback strategy if Groq AI is limited / offline / timed out
+        if (difficultyDecision.source !== "ai") {
+            if (!hasPreviousSongHistory) {
+                // If no previous session history for this song: pick random phrase
+                difficultyDecision.difficulty = "medium";
+                difficultyDecision.reasoning =
+                    "Groq AI limit: Belum ada riwayat sesi belajar sebelumnya untuk lagu ini, mengambil frasa secara acak.";
+                difficultyDecision.source = "session_history_fallback";
+
+                const freshRows = candidateCards.filter(
+                    (c) => !recentRowIds.has(String(c.lyric_row_id))
+                );
+                pool = freshRows.length > 0 ? freshRows : candidateCards;
+            } else {
+                // Previous session exists: adapt using easy vs hard history, and randomly interleave unmapped words
+                const hardCards = candidateCards.filter(isHardPhrase);
+                const easyCards = candidateCards.filter(isEasyPhrase);
+                const unmappedCards = candidateCards.filter(isUnmappedPhrase);
+
+                const isStruggling = lastRating === "again" || lastRating === "hard";
+                const isExcelling = lastRating === "easy";
+                const shouldInterleaveUnmapped = Math.random() < 0.35 && unmappedCards.length > 0;
+
+                difficultyDecision.source = "session_history_fallback";
+
+                if (shouldInterleaveUnmapped) {
+                    pool = unmappedCards;
+                    difficultyDecision.difficulty = "medium";
+                    difficultyDecision.reasoning =
+                        "Groq AI limit: Menyisipkan kata baru yang belum pernah dipelajari secara acak di antara kata mudah dan sulit.";
+                } else if (isExcelling) {
+                    difficultyDecision.difficulty = "hard";
+                    difficultyDecision.reasoning =
+                        "Groq AI limit: Berdasarkan riwayat sesi sebelumnya, menyajikan kata sulit karena pengguna baru saja menjawab mudah.";
+                    pool = hardCards.length > 0 ? hardCards : (unmappedCards.length > 0 ? unmappedCards : candidateCards);
+                } else if (isStruggling) {
+                    difficultyDecision.difficulty = "easy";
+                    difficultyDecision.reasoning =
+                        "Groq AI limit: Berdasarkan riwayat sesi sebelumnya, menyajikan kata mudah untuk menguatkan pemahaman karena pengguna baru saja kesulitan.";
+                    pool = easyCards.length > 0 ? easyCards : (unmappedCards.length > 0 ? unmappedCards : candidateCards);
+                } else {
+                    difficultyDecision.difficulty = "medium";
+                    difficultyDecision.reasoning =
+                        "Groq AI limit: Berdasarkan riwayat sesi sebelumnya, menyajikan kosakata seimbang dan menyisipkan kata yang belum terpetakan.";
+                    const combined = [...unmappedCards, ...easyCards, ...hardCards];
+                    pool = combined.length > 0 ? combined : candidateCards;
+                }
+
+                // Filter out recently heard lyric rows for music clip variety
+                const freshRows = pool.filter((c) => !recentRowIds.has(String(c.lyric_row_id)));
+                if (freshRows.length > 0) {
+                    pool = freshRows;
+                }
+            }
+        } else {
+            // When Groq AI is active, filter candidates matching AI target weights
+            const minW = difficultyDecision.target_weight_min;
+            const maxW = difficultyDecision.target_weight_max;
+
+            // Tier 1: Unseen phrase + Different lyric row + Matches AI target difficulty
+            const tier1 = candidateCards.filter(
+                (c) =>
+                    !seenPhraseIds.has(c.phrase_id) &&
+                    !recentRowIds.has(String(c.lyric_row_id)) &&
+                    c.weight >= minW &&
+                    c.weight <= maxW
+            );
+
+            // Tier 2: Unseen phrase + Different lyric row (flexible weight)
+            const tier2 = candidateCards.filter(
+                (c) =>
+                    !seenPhraseIds.has(c.phrase_id) &&
+                    !recentRowIds.has(String(c.lyric_row_id))
+            );
+
+            // Tier 3: Different lyric row + Matches AI target difficulty
+            const tier3 = candidateCards.filter(
+                (c) =>
+                    !recentRowIds.has(String(c.lyric_row_id)) &&
+                    c.weight >= minW &&
+                    c.weight <= maxW
+            );
+
+            // Tier 4: Matches AI target difficulty
+            const tier4 = candidateCards.filter(
+                (c) => c.weight >= minW && c.weight <= maxW
+            );
+
+            pool =
+                tier1.length > 0
+                    ? tier1
+                    : tier2.length > 0
+                    ? tier2
+                    : tier3.length > 0
+                    ? tier3
+                    : tier4.length > 0
+                    ? tier4
+                    : candidateCards;
+        }
 
         // Random selection from the best available candidate pool!
         const randomIndex = Math.floor(Math.random() * pool.length);
