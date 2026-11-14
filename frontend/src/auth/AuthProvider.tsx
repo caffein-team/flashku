@@ -24,8 +24,6 @@ type AuthContextValue = {
   signIn: (result: AuthResult) => Promise<void>;
   signOut: () => Promise<void>;
   updateUser: (patch: Partial<Pick<AuthUser, 'name' | 'username' | 'picture' | 'level'>>) => void;
-  /** SEMENTARA: masuk tanpa backend untuk mengerjakan UI. Hapus sebelum rilis. */
-  devSignIn: () => void;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -95,11 +93,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setStatus('authenticated');
   }, []);
 
-  const devSignIn = useCallback(() => {
-    setUser({ username: 'Dev User', email: 'dev@flashku.local' });
-    setStatus('authenticated');
-  }, []);
-
   useEffect(() => {
     let active = true;
     (async () => {
@@ -129,8 +122,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [clearSession]);
 
   const value = useMemo(
-    () => ({ status, user, signIn, signOut, updateUser, devSignIn }),
-    [status, user, signIn, signOut, updateUser, devSignIn],
+    () => ({ status, user, signIn, signOut, updateUser }),
+    [status, user, signIn, signOut, updateUser],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

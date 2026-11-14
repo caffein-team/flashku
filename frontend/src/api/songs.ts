@@ -28,6 +28,7 @@ export type Phrase = {
   reading: string;
   romaji?: string;
   meaning?: string | null;
+  partOfSpeech?: string;
   wordOrder: number;
 };
 
@@ -79,6 +80,7 @@ function toDetail(raw: any): SongDetail {
         reading: p.reading,
         romaji: p.romanization ?? p.romaji,
         meaning: p.meaning,
+        partOfSpeech: p.part_of_speech,
         wordOrder: p.word_order,
       })),
     })),

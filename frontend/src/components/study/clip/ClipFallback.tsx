@@ -1,9 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import Animated, { FadeOut } from 'react-native-reanimated';
 
 import { font } from '@/theme/fonts';
 import { useTheme } from '@/theme/ThemeProvider';
+
+const BADGE_MS = 2000;
 
 /** Bingkai video 16:9-ish dengan badge YouTube; isi pemutar ada di `children`. */
 export function ClipFrame({
@@ -20,6 +23,12 @@ export function ClipFrame({
   icon?: keyof typeof Ionicons.glyphMap;
 }) {
   const { colors } = useTheme();
+  // Lencana YouTube hanya penanda sumber; hilang setelah 2 detik agar tidak menutupi video.
+  const [badge, setBadge] = useState(true);
+  useEffect(() => {
+    const t = setTimeout(() => setBadge(false), BADGE_MS);
+    return () => clearTimeout(t);
+  }, []);
   return (
     <View style={[styles.frame, { backgroundColor: colors.banner }]}>
       <View style={styles.center}>
@@ -29,10 +38,12 @@ export function ClipFrame({
         )}
       </View>
       {children}
-      <View style={styles.badge} pointerEvents="none">
-        <View style={styles.dot} />
-        <Text style={styles.badgeText}>YouTube</Text>
-      </View>
+      {badge && (
+        <Animated.View exiting={FadeOut.duration(300)} style={styles.badge} pointerEvents="none">
+          <View style={styles.dot} />
+          <Text style={styles.badgeText}>YouTube</Text>
+        </Animated.View>
+      )}
     </View>
   );
 }

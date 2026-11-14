@@ -11,6 +11,7 @@ import { useAuth } from '@/auth/AuthProvider';
 import { PageHeader } from '@/components/PageHeader';
 import { useSongsList } from '@/features/songs/queries';
 import { useProgress } from '@/features/stats/progress';
+import { useVocabularyCount } from '@/features/stats/vocabulary';
 import { youtubeThumbnail } from '@/features/songs/thumbnail';
 import { getLastStudiedSong } from '@/features/study/lastStudied';
 import { font } from '@/theme/fonts';
@@ -21,6 +22,7 @@ export default function HomeScreen() {
   const { user } = useAuth();
   const list = useSongsList();
   const progress = useProgress();
+  const vocabulary = useVocabularyCount();
   const lastId = useQuery({ queryKey: ['last-studied'], queryFn: getLastStudiedSong, gcTime: 0 });
 
   const songs = useMemo(() => list.data?.pages.flatMap((p) => p.items) ?? [], [list.data]);
@@ -31,7 +33,7 @@ export default function HomeScreen() {
   const level = Math.max(progress.data?.level ?? 0, user?.level ?? 0) || 1;
   const percent = Math.min(100, Math.max(0, progress.data?.percent ?? 0));
   const stats = [
-    { label: 'Kosakata', value: '—' },
+    { label: 'Kosakata', value: vocabulary.count ?? '—' },
     { label: 'Lagu', value: total ?? '—' },
   ];
 
@@ -39,7 +41,7 @@ export default function HomeScreen() {
     <View style={[styles.flex, { backgroundColor: colors.background }]}>
       <PageHeader title={`Halo${username ? ` ${username}` : ''}!`} />
       <ScrollView contentContainerStyle={styles.content}>
-        <View style={[styles.stat, styles.levelCard, { backgroundColor: colors.surface }]}>
+        <View style={[styles.levelCard, { backgroundColor: colors.surface }]}>
           <Text style={[styles.statValue, { color: colors.link }]}>{level}</Text>
           <Text style={[styles.statLabel, { color: colors.textMuted }]}>Level</Text>
           <View
@@ -139,7 +141,8 @@ const styles = StyleSheet.create({
   content: { padding: 20, paddingBottom: 32, gap: 12 },
   stats: { flexDirection: 'row', gap: 10 },
   stat: { flex: 1, borderRadius: 20, paddingVertical: 14, alignItems: 'center', gap: 2 },
-  levelCard: { flex: 0, paddingHorizontal: 20, paddingBottom: 18 },
+  // Tidak memakai `stat`: flex: 1 di dalam kolom membuat kartu ini menciut ke tinggi 0.
+  levelCard: { borderRadius: 20, paddingTop: 14, paddingBottom: 18, paddingHorizontal: 20, alignItems: 'center', gap: 2 },
   bar: { alignSelf: 'stretch', height: 10, borderRadius: 5, overflow: 'hidden', marginTop: 8 },
   xpText: { fontFamily: font.regular, fontSize: 12, marginTop: 4 },
   barFill: { height: '100%', borderRadius: 5 },

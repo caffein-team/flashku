@@ -13,7 +13,6 @@ import {
 import { assetUrl } from "@/api/client";
 import { useAuth } from "@/auth/AuthProvider";
 import { Button } from "@/components/Button";
-import { DevTokenCard } from "@/components/settings/DevTokenCard";
 import { PageHeader } from "@/components/PageHeader";
 import { ToggleRow } from "@/components/settings/SettingsUI";
 import { setPreference, usePreferences } from "@/features/settings/preferences";
@@ -146,9 +145,6 @@ export default function SettingsScreen() {
           </View>
           <Button title="Donasi" onPress={soon} style={styles.donate} />
         </View> */}
-
-        {/* SEMENTARA: hapus sebelum rilis */}
-        <DevTokenCard />
 
         <Button title="Keluar" variant="outline" onPress={confirmSignOut} />
       </ScrollView>
