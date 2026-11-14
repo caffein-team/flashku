@@ -92,6 +92,33 @@ export function isMeaningfulPhrase(phrase?: {
     return /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}]/u.test(stripped);
 }
 
+/**
+ * Checks whether a phrase is a Japanese grammatical particle (助詞),
+ * used to exclude particles from vocabulary flashcards.
+ */
+export function isParticle(phrase?: {
+    surface_form?: string;
+    dictionary_form?: string;
+    part_of_speech?: string;
+} | null): boolean {
+    if (!phrase) return false;
+    const pos = (phrase.part_of_speech || "").trim().toLowerCase();
+    if (pos === "particle" || pos === "助詞" || pos.includes("助詞")) {
+        return true;
+    }
+
+    const surface = (phrase.surface_form || phrase.dictionary_form || "").trim();
+    const commonParticles = new Set([
+        "は", "が", "を", "に", "で", "の", "も", "へ", "と", "から", "まで", "より",
+        "ね", "よ", "か", "わ", "ぞ", "ぜ", "な", "さ", "や", "ば", "て", "けど", "のに"
+    ]);
+    if (commonParticles.has(surface) && (!pos || pos === "particle" || pos.includes("助詞") || pos === "other")) {
+        return true;
+    }
+
+    return false;
+}
+
 let tokenizerPromise: Promise<Tokenizer<any>> | null = null;
 
 export function getTokenizer(): Promise<Tokenizer<any>> {

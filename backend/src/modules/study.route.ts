@@ -14,7 +14,7 @@ import {
     StudySessionBody
 } from "../types/study";
 import { IUser } from "../types/auth";
-import { getPhraseWeight, isMeaningfulPhrase } from "../utils/japanese";
+import { getPhraseWeight, isMeaningfulPhrase, isParticle } from "../utils/japanese";
 
 const StudyRouter = express.Router();
 
@@ -126,8 +126,8 @@ StudyRouter.post("/session", async (req: Request, res: Response) => {
                 for (let pIdx = 0; pIdx < phrases.length; pIdx++) {
                     const p = phrases[pIdx];
 
-                    // Filter out phrases that are only symbols, punctuation, or non-meaningful tokens
-                    if (!isMeaningfulPhrase(p)) {
+                    // Filter out phrases that are symbols, punctuation, English words, or grammatical particles
+                    if (!isMeaningfulPhrase(p) || isParticle(p)) {
                         continue;
                     }
 
