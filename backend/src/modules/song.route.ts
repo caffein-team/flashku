@@ -453,16 +453,60 @@ SongRouter.post("/:id/enrich-ai", async (req: Request, res: Response) => {
         const untranslated_rows = lyric_rows.filter((r) => !r.translation || !r.translation.trim());
         const rows_to_enrich = untranslated_rows.length > 0 ? untranslated_rows : lyric_rows;
 
+        const COMMON_PARTICLE_MEANINGS: Record<string, string> = {
+            "は": "partikel penanda topik (adalah/mengenai)",
+            "が": "partikel penanda subjek",
+            "を": "partikel penanda objek",
+            "に": "di / ke / pada (partikel arah/waktu/tujuan)",
+            "へ": "menuju / ke arah",
+            "で": "di / dengan (partikel tempat/alat)",
+            "と": "dan / bersama / dengan",
+            "も": "juga / pun",
+            "の": "kepemilikan / penjelas kata benda (dari/punya)",
+            "から": "dari / sejak / karena",
+            "まで": "sampai / hingga",
+            "より": "daripada / lebih dari",
+            "ね": "ya / bukan? (partikel penegas/persetujuan)",
+            "よ": "lho / tahu (partikel penegas informasi)",
+            "か": "apakah (partikel tanya)",
+            "わ": "partikel penegas lembut",
+            "ぞ": "partikel penegas tegas",
+            "ぜ": "partikel penegas ajakan/semangat",
+            "な": "partikel larangan / penegas",
+            "さ": "partikel nada bicara kasual",
+            "だ": "adalah (kopula kasual)",
+            "です": "adalah (kopula sopan)",
+            "ます": "bentuk sopan kata kerja",
+            "た": "penanda bentuk lampau",
+            "ない": "tidak / bukan (penanda negatif)",
+            "ている": "sedang (bentuk progresif)",
+            "てる": "sedang (singkatan kasual dari teiru)",
+            "て": "partikel penghubung bentuk te",
+            "ば": "jika / kalau",
+            "たら": "jika / setelah",
+            "なら": "jika memang / kalau"
+        };
+
         const chunkSize = 20;
         let totalTranslations = 0;
         let totalMeanings = 0;
 
         for (let i = 0; i < rows_to_enrich.length; i += chunkSize) {
             const chunk = rows_to_enrich.slice(i, i + chunkSize);
-            const batchForAi = chunk.map((r) => ({
-                id: r.row_order,
-                raw_text: r.raw_text
-            }));
+            const batchForAi = chunk.map((r) => {
+                const tokensSet = new Set<string>();
+                if (Array.isArray(r.phrases)) {
+                    for (const p of r.phrases) {
+                        if (p.dictionary_form) tokensSet.add(p.dictionary_form.trim());
+                        if (p.surface_form) tokensSet.add(p.surface_form.trim());
+                    }
+                }
+                return {
+                    id: r.row_order,
+                    raw_text: r.raw_text,
+                    tokens: Array.from(tokensSet)
+                };
+            });
 
             const result = await enrichBatchWithAi(batchForAi, target_language);
             const rowTranslations = result.row_translations || {};
@@ -477,9 +521,27 @@ SongRouter.post("/:id/enrich-ai", async (req: Request, res: Response) => {
 
                 if (Array.isArray(row.phrases)) {
                     for (const phrase of row.phrases) {
-                        const dictForm = phrase.dictionary_form;
-                        const surface = phrase.surface_form;
-                        const meaning = vocabMeanings[dictForm] || vocabMeanings[surface];
+                        const dictForm = phrase.dictionary_form?.trim();
+                        const surface = phrase.surface_form?.trim();
+
+                        let meaning =
+                            (dictForm && vocabMeanings[dictForm]) ||
+                            (surface && vocabMeanings[surface]) ||
+                            (dictForm && COMMON_PARTICLE_MEANINGS[dictForm]) ||
+                            (surface && COMMON_PARTICLE_MEANINGS[surface]);
+
+                        if (!meaning && dictForm) {
+                            for (const [k, v] of Object.entries(vocabMeanings)) {
+                                if (
+                                    k.toLowerCase() === dictForm.toLowerCase() ||
+                                    k.toLowerCase() === (surface || "").toLowerCase()
+                                ) {
+                                    meaning = v;
+                                    break;
+                                }
+                            }
+                        }
+
                         if (meaning) {
                             phrase.meaning = meaning;
                             totalMeanings++;

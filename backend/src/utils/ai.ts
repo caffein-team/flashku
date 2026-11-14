@@ -143,7 +143,7 @@ export async function checkAiQuotaStatus(): Promise<AiQuotaStatus> {
 }
 
 export async function enrichBatchWithAi(
-    batchRows: { id: string | number; raw_text: string }[],
+    batchRows: { id: string | number; raw_text: string; tokens?: string[] }[],
     targetLanguage: string = "Indonesian"
 ): Promise<AiEnrichResult> {
     const config = getAiConfig();
@@ -161,11 +161,24 @@ export async function enrichBatchWithAi(
         idxToRowId.set(idx + 1, r.id);
     });
 
+    // Collect all unique tokens across the batch for explicit translation
+    const allTokensSet = new Set<string>();
+    batchRows.forEach((r) => {
+        if (Array.isArray(r.tokens)) {
+            r.tokens.forEach((t) => {
+                if (t && t.trim()) allTokensSet.add(t.trim());
+            });
+        }
+    });
+    const tokensList = Array.from(allTokensSet);
+
     const systemInstruction =
-        `You are an expert Japanese-to-${targetLanguage} translator and language tutor.\n` +
-        `Given numbered song lyric lines, provide:\n` +
+        `You are an expert Japanese-to-${targetLanguage} translator and Japanese language tutor.\n` +
+        `Given numbered song lyric lines and a list of specific vocabulary words/tokens extracted from those lines, provide:\n` +
         `1. A natural, poetic yet accurate translation of each numbered lyric line into ${targetLanguage}.\n` +
-        `2. A concise, contextual meaning for each key vocabulary word or phrase in ${targetLanguage}.\n` +
+        `2. A concise, accurate contextual meaning in ${targetLanguage} for EACH word in the provided vocabulary words list without skipping any.\n` +
+        `- For content words (nouns, verbs, adjectives): provide their contextual meaning in ${targetLanguage}.\n` +
+        `- For particles and grammatical words (e.g. は, が, を, に, で, の, も, から, など): explain their grammatical function or meaning in ${targetLanguage} (e.g. "partikel penanda objek", "partikel topik", "kepemilikan (dari/punya)", "di/ke/pada").\n` +
         `Output strictly valid JSON with this exact schema:\n` +
         `{\n` +
         `  "lines": [\n` +
@@ -176,13 +189,18 @@ export async function enrichBatchWithAi(
         `  }\n` +
         `}`;
 
+    const userPayload: any = { lines: indexedLines };
+    if (tokensList.length > 0) {
+        userPayload.words_to_translate = tokensList;
+    }
+
     try {
         const groq = getGroqClient(config.apiKey, config.baseUrl, config.proxyUrl);
         const completion = await groq.chat.completions.create({
             model: config.model,
             messages: [
                 { role: "system", content: systemInstruction },
-                { role: "user", content: "Lines:\n" + JSON.stringify(indexedLines) }
+                { role: "user", content: "Data:\n" + JSON.stringify(userPayload) }
             ],
             response_format: { type: "json_object" },
             temperature: 0.2
