@@ -42,3 +42,6 @@ example
 /ios
 /android
 .env
+
+# Claude Code local config
+.claude/

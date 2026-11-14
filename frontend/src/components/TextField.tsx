@@ -8,7 +8,6 @@ import { useTheme } from '@/theme/ThemeProvider';
 type Props = TextInputProps & {
   label: string;
   error?: string;
-  /** Tampilkan tombol mata untuk menampilkan/menyembunyikan teks. */
   password?: boolean;
 };
 

@@ -1,6 +1,6 @@
 export type Colors = {
   primary: string;
-  primaryText: string; // teks di atas warna primary
+  primaryText: string;
   link: string;
   background: string;
   surface: string;
@@ -14,6 +14,11 @@ export type Colors = {
   banner: string;
   bannerText: string;
   tabActive: string;
+  track: string;
+  success: string;
+  successSoft: string;
+  dangerSoft: string;
+  tint: string;
 };
 
 export const lightColors: Colors = {
@@ -32,6 +37,11 @@ export const lightColors: Colors = {
   banner: '#DAD8F8',
   bannerText: '#1E1B5E',
   tabActive: '#DAD8F8',
+  track: '#DDDCE3',
+  success: '#16A34A',
+  successSoft: '#D1EBD6',
+  dangerSoft: '#FFE2E2',
+  tint: '#EFEEFC',
 };
 
 export const darkColors: Colors = {
@@ -50,6 +60,11 @@ export const darkColors: Colors = {
   banner: '#2B2A5C',
   bannerText: '#E4E3FF',
   tabActive: '#2B2A5C',
+  track: '#363648',
+  success: '#34D399',
+  successSoft: '#1F3B2A',
+  dangerSoft: '#42232A',
+  tint: '#23233A',
 };
 
 // Header ungu tetap sama di kedua tema.

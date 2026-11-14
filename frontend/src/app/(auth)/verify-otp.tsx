@@ -9,6 +9,7 @@ import { useAuth } from '@/auth/AuthProvider';
 import { AuthScreen } from '@/components/AuthScreen';
 import { Button } from '@/components/Button';
 import { OtpInput } from '@/components/OtpInput';
+import { goBack } from '@/lib/navigation';
 import { OTP_LENGTH } from '@/lib/schemas';
 import { font } from '@/theme/fonts';
 import { useTheme } from '@/theme/ThemeProvider';
@@ -66,7 +67,7 @@ export default function VerifyOtpScreen() {
       title="Verifikasi email"
       subtitle={`Masukkan ${OTP_LENGTH} digit kode yang dikirim ke ${email || 'emailmu'}.`}
       footer={
-        <Pressable hitSlop={8} onPress={() => router.back()}>
+        <Pressable hitSlop={8} onPress={() => goBack('/register')}>
           <Text style={[styles.back, { color: colors.link }]}>Ganti email</Text>
         </Pressable>
       }

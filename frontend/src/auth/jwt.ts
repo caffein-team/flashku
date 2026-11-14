@@ -1,6 +1,7 @@
-import type { AuthUser } from '@/api/auth';
+import type { AuthUser } from "@/api/auth";
 
 type Claims = {
+  data?: { _id?: string; name?: string; username?: string; email?: string; avatar?: string | null; created_at?: string; level?: number };
   exp?: number;
   sub?: string | number;
   email?: string;
@@ -10,10 +11,9 @@ type Claims = {
 };
 
 function base64UrlDecode(input: string): string {
-  const b64 = input.replace(/-/g, '+').replace(/_/g, '/');
-  const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
+  const b64 = input.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
   const binary = atob(padded);
-  // decode UTF-8
   const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
   return new TextDecoder().decode(bytes);
 }
@@ -21,7 +21,7 @@ function base64UrlDecode(input: string): string {
 /** Baca payload JWT tanpa verifikasi (verifikasi tugas backend). */
 export function decodeJwt(token: string): Claims | null {
   try {
-    const part = token.split('.')[1];
+    const part = token.split(".")[1];
     if (!part) return null;
     return JSON.parse(base64UrlDecode(part)) as Claims;
   } catch {
@@ -38,5 +38,13 @@ export function isExpired(token: string): boolean {
 export function userFromToken(token: string): AuthUser {
   const c = decodeJwt(token);
   if (!c) return {};
-  return { id: c.sub, email: c.email, username: c.username, name: c.name, picture: c.picture };
+  return {
+    id: c.data?._id,
+    email: c.data?.email,
+    name: c.data?.name,
+    username: c.data?.username ?? c.data?.name,
+    picture: c.data?.avatar ?? undefined,
+    createdAt: c.data?.created_at,
+    level: c.data?.level,
+  };
 }

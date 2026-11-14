@@ -11,6 +11,8 @@ import {
 
 import type { AuthResult, AuthUser } from '@/api/auth';
 import { setAccessToken, setUnauthorizedHandler } from '@/api/client';
+import { cancelAllNotifications } from '@/features/settings/notifications/scheduler';
+import { loadProfileOverride, saveProfileOverride } from '@/features/settings/profile/profileStore';
 import { isExpired, userFromToken } from './jwt';
 import { tokenStorage } from './tokenStorage';
 
@@ -19,9 +21,9 @@ type Status = 'loading' | 'authenticated' | 'unauthenticated';
 type AuthContextValue = {
   status: Status;
   user: AuthUser | null;
-  /** Simpan JWT dari hasil login/verify/google. */
   signIn: (result: AuthResult) => Promise<void>;
   signOut: () => Promise<void>;
+  updateUser: (patch: Partial<Pick<AuthUser, 'name' | 'username' | 'picture' | 'level'>>) => void;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -45,18 +47,52 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { GoogleSignin } = await import('@react-native-google-signin/google-signin');
       await GoogleSignin.signOut();
     } catch {}
+    try {
+      await cancelAllNotifications(); // pengingat tidak boleh terus berbunyi setelah keluar
+    } catch {}
     await clearSession();
   }, [clearSession]);
+
+  /** Terapkan nama yang diubah di perangkat ini; token masih membawa nama lama. */
+  const applyOverride = useCallback(async (id: AuthUser['id']) => {
+    const override = await loadProfileOverride(id);
+    if (!override) return;
+    setUser((u) => {
+      if (!u) return u;
+      const { picture, level, ...rest } = override;
+      return {
+        ...u,
+        ...rest,
+        // Level hanya naik: jangan timpa level yang lebih baru dari server.
+        level: Math.max(u.level ?? 0, level ?? 0) || undefined,
+        ...(picture !== undefined && { picture: picture ?? undefined }),
+      };
+    });
+  }, []);
+
+  const updateUser = useCallback(
+    (patch: Partial<Pick<AuthUser, 'name' | 'username' | 'picture' | 'level'>>) => {
+      const next = { ...user, ...patch };
+      setUser((u) => (u ? { ...u, ...patch } : u));
+      void saveProfileOverride(user?.id, {
+        name: next.name,
+        username: next.username,
+        picture: next.picture ?? null,
+        level: next.level,
+      });
+    },
+    [user],
+  );
 
   const signIn = useCallback(async ({ token, user: apiUser }: AuthResult) => {
     if (!token) throw new Error('Respons server tidak berisi token.');
     await tokenStorage.set(token);
     setAccessToken(token);
-    setUser({ ...userFromToken(token), ...apiUser });
+    const merged = { ...userFromToken(token), ...apiUser };
+    setUser(merged);
     setStatus('authenticated');
   }, []);
 
-  // Restore sesi saat app dibuka.
   useEffect(() => {
     let active = true;
     (async () => {
@@ -68,15 +104,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
       setAccessToken(token);
-      setUser(userFromToken(token));
+      const restored = userFromToken(token);
+      setUser(restored);
       setStatus('authenticated');
+      void applyOverride(restored.id);
     })();
     return () => {
       active = false;
     };
-  }, []);
+  }, [applyOverride]);
 
-  // 401 dari API → sesi habis.
   useEffect(() => {
     setUnauthorizedHandler(() => {
       void clearSession();
@@ -85,8 +122,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [clearSession]);
 
   const value = useMemo(
-    () => ({ status, user, signIn, signOut }),
-    [status, user, signIn, signOut],
+    () => ({ status, user, signIn, signOut, updateUser }),
+    [status, user, signIn, signOut, updateUser],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

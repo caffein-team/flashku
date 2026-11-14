@@ -5,20 +5,24 @@ import { Controller, useForm } from 'react-hook-form';
 import { Alert } from 'react-native';
 
 import { authApi } from '@/api/auth';
-import { getErrorMessage } from '@/api/client';
+import { getErrorBody, getErrorMessage } from '@/api/client';
+import { useAuth } from '@/auth/AuthProvider';
 import { useGoogleSignIn } from '@/auth/useGoogleSignIn';
 import { FooterLink, GoogleButton, OrDivider } from '@/components/AuthExtras';
 import { AuthScreen } from '@/components/AuthScreen';
 import { Button } from '@/components/Button';
 import { TextField } from '@/components/TextField';
+import { GOOGLE_AUTH_ENABLED, OTP_ENABLED } from '@/lib/config';
 import { registerSchema, type RegisterForm } from '@/lib/schemas';
 
 export default function RegisterScreen() {
+  const { signIn } = useAuth();
   const google = useGoogleSignIn();
 
   const {
     control,
     handleSubmit,
+    setError,
     formState: { errors },
   } = useForm<RegisterForm>({
     resolver: zodResolver(registerSchema),
@@ -26,15 +30,38 @@ export default function RegisterScreen() {
   });
 
   const register = useMutation({
-    // 1) /auth/register  2) /auth/send-otp  → lanjut ke layar OTP  3) /auth/verify
     mutationFn: async (v: RegisterForm) => {
-      const input = { ...v, username: v.username.trim(), email: v.email.trim() };
-      await authApi.register(input);
-      await authApi.sendOtp(input.email);
-      return input.email;
+      const name = v.username.trim();
+      const email = v.email.trim();
+      const result = await authApi.register({ name, email, password: v.password });
+
+      if (OTP_ENABLED) {
+        await authApi.sendOtp(email);
+        return { email, result: null };
+      }
+      // Tanpa OTP: pakai token dari register, atau login otomatis dengan akun yang baru dibuat.
+      return { email, result: result.token ? result : await authApi.login(email, v.password) };
     },
-    onSuccess: (email) => router.push({ pathname: '/verify-otp', params: { email } }),
-    onError: (error) => Alert.alert('Gagal mendaftar', getErrorMessage(error)),
+    onSuccess: async ({ email, result }) => {
+      if (result) await signIn(result); // route guard memindahkan ke halaman utama
+      else router.push({ pathname: '/verify-otp', params: { email } });
+    },
+    onError: (error) => {
+      const fieldErrors = getErrorBody(error).errors;
+      if (fieldErrors) {
+        const map = { name: 'username', email: 'email', password: 'password' } as const;
+        let shown = false;
+        for (const [key, message] of Object.entries(fieldErrors)) {
+          const field = map[key as keyof typeof map];
+          if (field) {
+            setError(field, { message });
+            shown = true;
+          }
+        }
+        if (shown) return;
+      }
+      Alert.alert('Gagal mendaftar', getErrorMessage(error));
+    },
   });
 
   const busy = register.isPending || google.loading;
@@ -101,13 +128,17 @@ export default function RegisterScreen() {
       />
 
       <Button title="Daftar" loading={register.isPending} disabled={busy} onPress={submit} />
-      <OrDivider />
-      <GoogleButton
-        title="Daftar dengan Google"
-        onPress={google.signInWithGoogle}
-        loading={google.loading}
-        disabled={busy}
-      />
+      {GOOGLE_AUTH_ENABLED && (
+        <>
+          <OrDivider />
+          <GoogleButton
+            title="Daftar dengan Google"
+            onPress={google.signInWithGoogle}
+            loading={google.loading}
+            disabled={busy}
+          />
+        </>
+      )}
     </AuthScreen>
   );
 }

@@ -10,7 +10,7 @@
     "android": {
       "package": "com.logicodix.flashku",
       "adaptiveIcon": {
-        "backgroundColor": "#5B5BF0",
+        "backgroundColor": "#7A39FF",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
@@ -28,16 +28,37 @@
         {
           "backgroundColor": "#5B5BF0",
           "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
+          "imageWidth": 288
         }
-      ]
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#5B5BF0"
+        }
+      ],
+      "expo-font",
+      "expo-status-bar",
+      "expo-web-browser",
+      "expo-video"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
     },
     "platforms": [
-      "android"
-    ]
+      "android",
+      "web"
+    ],
+    "extra": {
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      },
+      "eas": {
+        "projectId": "929291d5-bd57-4b74-b268-30e05cd376b3"
+      }
+    }
   }
 }
