@@ -18,6 +18,14 @@ const JMDICT_JSON_PATH = path.resolve(
     "../../data/jmdict/jmdict-eng-common-3.6.2.json"
 );
 
+// Strip parenthetical notes like "(usu. excluding the Sun)", "(distant)", "(often written...)" from gloss text
+function cleanGloss(text: string): string {
+    return text
+        .replace(/\s*\([^)]*\)/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
 function buildJmdictIndex(jsonPath: string): Map<string, string> {
     const raw = fs.readFileSync(jsonPath, "utf8");
     const data = JSON.parse(raw) as {
@@ -30,22 +38,41 @@ function buildJmdictIndex(jsonPath: string): Map<string, string> {
         }>;
     };
 
+    // Two-pass build: common entries take priority over non-common ones.
+    // This prevents rare/alternative kanji spellings (e.g. 風 as alternate for 振り)
+    // from overwriting the primary common entry (e.g. 風 = wind / かぜ).
     const index = new Map<string, string>();
+    const indexCommon = new Set<string>();
 
     for (const word of data.words) {
-        // Collect top English glosses (up to 4 meanings)
-        const glosses = word.sense
+        // Take the single most representative gloss and clean parenthetical notes
+        const rawGloss = word.sense
             .flatMap((s) => s.gloss.filter((g) => g.lang === "eng").map((g) => g.text))
-            .slice(0, 4)
+            .slice(0, 1)
             .join("; ");
 
-        if (!glosses) continue;
+        if (!rawGloss) continue;
+        const glosses = cleanGloss(rawGloss) || rawGloss; // fallback to raw if clean yields empty
 
         for (const k of word.kanji) {
-            if (!index.has(k.text)) index.set(k.text, glosses);
+            if (k.common) {
+                if (!indexCommon.has(k.text)) {
+                    index.set(k.text, glosses);
+                    indexCommon.add(k.text);
+                }
+            } else {
+                if (!index.has(k.text)) index.set(k.text, glosses);
+            }
         }
         for (const k of word.kana) {
-            if (!index.has(k.text)) index.set(k.text, glosses);
+            if (k.common) {
+                if (!indexCommon.has(k.text)) {
+                    index.set(k.text, glosses);
+                    indexCommon.add(k.text);
+                }
+            } else {
+                if (!index.has(k.text)) index.set(k.text, glosses);
+            }
         }
     }
 
@@ -208,12 +235,12 @@ async function saveMeaningToCache(word: string, meaningEn: string, meaningId?: s
 // ---------------------------------------------------------------------------
 
 /**
- * Looks up the Indonesian meaning of a Japanese phrase using:
+ * Looks up the English meaning of a Japanese phrase using:
  *   1. Grammar particles table (always Indonesian, instant)
  *   2. MongoDB dictionary_cache (previously translated/cached)
- *   3. JMdict in-memory index → English meaning
+ *   3. JMdict in-memory index — tries dictionary_form → surface_form → reading (hiragana/katakana)
  *      a. Groq AI translates English → Indonesian (async, may fail)
- *      b. If Groq fails/limit → save English meaning as fallback (not null)
+ *      b. If Groq fails/unavailable → save & return English meaning as fallback (never null)
  *      c. Result cached to MongoDB for future lookups
  */
 export async function lookupPhraseMeaning(phrase: {
@@ -228,7 +255,8 @@ export async function lookupPhraseMeaning(phrase: {
     const surfaceForm = (phrase.surface_form || "").trim();
     const reading = (phrase.reading || "").trim();
 
-    const candidates = [dictForm, surfaceForm, reading].filter(Boolean);
+    // Build candidate list: dict form first (most reliable), then surface, then reading
+    const candidates = [...new Set([dictForm, surfaceForm, reading].filter(Boolean))];
     if (candidates.length === 0) return null;
 
     // 1. Grammar particles – instant, always Indonesian
@@ -236,13 +264,13 @@ export async function lookupPhraseMeaning(phrase: {
         if (GRAMMAR_PARTICLES_ID[c]) return GRAMMAR_PARTICLES_ID[c];
     }
 
-    // 2. MongoDB dictionary_cache – previous translations
+    // 2. MongoDB dictionary_cache – previous translations (check all candidates)
     for (const c of candidates) {
         const cached = await getCachedMeaning(c);
         if (cached) return cached;
     }
 
-    // 3. JMdict index – get English meaning
+    // 3. JMdict index – try all candidates (dict form, surface form, reading)
     const jmdict = await getJmdictIndex();
     let englishMeaning: string | null = null;
     let matchedWord: string = dictForm || surfaceForm;
@@ -262,7 +290,6 @@ export async function lookupPhraseMeaning(phrase: {
     const indonesianMeaning = await translateEnToId(englishMeaning, matchedWord);
 
     if (indonesianMeaning) {
-        // Cache Indonesian result
         await saveMeaningToCache(matchedWord, englishMeaning, indonesianMeaning);
         return indonesianMeaning;
     }

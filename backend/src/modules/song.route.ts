@@ -495,11 +495,35 @@ SongRouter.post("/:id/enrich-ai", async (req: Request, res: Response) => {
         let totalTranslations = 0;
         let totalMeanings = 0;
 
-        // Pre-collect all phrases across all rows for batch dictionary lookup
-        const allPhrases = rows_to_enrich.flatMap((r) =>
+        // Pre-collect ALL phrases across ALL rows (not just untranslated) for batch dictionary lookup
+        const allPhrases = lyric_rows.flatMap((r) =>
             Array.isArray(r.phrases) ? r.phrases.filter(isMeaningfulPhrase) : []
         );
         const dictMeaningsMap = await batchLookupPhraseMeanings(allPhrases);
+
+        // Apply phrase meanings to ALL rows upfront (not just the AI-enriched chunk),
+        // so every phrase gets a meaning even if its row already has a translation.
+        for (const row of lyric_rows) {
+            if (!Array.isArray(row.phrases)) continue;
+            for (const phrase of row.phrases) {
+                if (!isMeaningfulPhrase(phrase)) continue;
+                const dictForm = phrase.dictionary_form?.trim();
+                const surface = phrase.surface_form?.trim();
+                const reading = phrase.reading?.trim();
+
+                // Try dict form → surface form → reading (hiragana) in order
+                const meaning =
+                    (dictForm && dictMeaningsMap.get(dictForm)) ||
+                    (surface && dictMeaningsMap.get(surface)) ||
+                    (reading && dictMeaningsMap.get(reading)) ||
+                    undefined;
+
+                if (meaning) {
+                    phrase.meaning = meaning;
+                    totalMeanings++;
+                }
+            }
+        }
 
         for (let i = 0; i < rows_to_enrich.length; i += chunkSize) {
             const chunk = rows_to_enrich.slice(i, i + chunkSize);
@@ -516,24 +540,6 @@ SongRouter.post("/:id/enrich-ai", async (req: Request, res: Response) => {
                 if (trans) {
                     row.translation = trans;
                     totalTranslations++;
-                }
-
-                if (Array.isArray(row.phrases)) {
-                    for (const phrase of row.phrases) {
-                        const dictForm = phrase.dictionary_form?.trim();
-                        const surface = phrase.surface_form?.trim();
-
-                        // Look up meaning from local dictionary (built-in + MongoDB cache)
-                        const meaning =
-                            (dictForm && dictMeaningsMap.get(dictForm)) ||
-                            (surface && dictMeaningsMap.get(surface)) ||
-                            undefined;
-
-                        if (meaning) {
-                            phrase.meaning = meaning;
-                            totalMeanings++;
-                        }
-                    }
                 }
             }
 
