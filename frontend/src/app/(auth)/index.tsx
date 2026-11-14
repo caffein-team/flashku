@@ -1,9 +1,6 @@
 import { Redirect } from 'expo-router';
 
-/**
- * Belum login: URL "/" diarahkan ke grup (auth). Tanpa file ini grup tersebut tidak punya
- * route awal, sehingga web menampilkan "Unmatched Route" di /(auth).
- */
+/** Tanpa route awal di grup ini, web menampilkan "Unmatched Route" di /(auth) saat belum login. */
 export default function AuthIndex() {
   return <Redirect href="/login" />;
 }

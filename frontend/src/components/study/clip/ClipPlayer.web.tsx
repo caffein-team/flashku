@@ -1,10 +1,9 @@
-import { useEffect, useImperativeHandle, useRef, useState, type ComponentRef } from 'react';
+import { useEffect, useRef, useState, type ComponentRef } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { CLIP_TICK_MS, clipWindow, type ClipPlayerProps } from './config';
 import { ClipFrame } from './ClipFallback';
 
-/** Pemutar potongan lagu (web): YouTube IFrame API langsung di halaman; logikanya sama dengan versi Android. */
 
 type YTPlayer = {
   playVideo(): void;
@@ -13,6 +12,8 @@ type YTPlayer = {
   getCurrentTime(): number;
   getPlayerState(): number;
   setPlaybackRate(rate: number): void;
+  unloadModule(name: string): void;
+  setOption(module: string, option: string, value: unknown): void;
   destroy(): void;
 };
 type YTNamespace = {
@@ -25,6 +26,20 @@ declare global {
     onYouTubeIframeAPIReady?: () => void;
   }
 }
+
+/** `cc_load_policy` tidak cukup: subtitle terjemahan otomatis YouTube tetap muncul beserta pop-up galatnya. */
+const hideCaptions = (p: YTPlayer) => {
+  // Modul subtitle dimuat beberapa saat setelah video jalan, jadi coba berulang.
+  for (const delay of [0, 400, 1200, 2500]) {
+    setTimeout(() => {
+      try {
+        p.setOption('captions', 'track', {});
+        p.unloadModule('captions');
+        p.unloadModule('cc');
+      } catch {}
+    }, delay);
+  }
+};
 
 let apiPromise: Promise<YTNamespace> | null = null;
 function loadYouTubeApi(): Promise<YTNamespace> {
@@ -49,22 +64,18 @@ export default function ClipPlayer({
   playing,
   rate,
   onPlayingChange,
-  onTime,
-  handleRef,
 }: ClipPlayerProps) {
   const hostRef = useRef<ComponentRef<typeof View>>(null);
   const playerRef = useRef<YTPlayer | null>(null);
   const readyRef = useRef(false);
   const actual = useRef(false);
-  const latest = useRef({ playing, rate, onPlayingChange, onTime });
+  const latest = useRef({ playing, rate, onPlayingChange });
   const [failed, setFailed] = useState(false);
 
-  // Callback/props terbaru untuk handler player (yang dibuat sekali per klip).
+  // Handler player dibuat sekali per klip, jadi baca props terbaru lewat ref.
   useEffect(() => {
-    latest.current = { playing, rate, onPlayingChange, onTime };
+    latest.current = { playing, rate, onPlayingChange };
   });
-
-  useImperativeHandle(handleRef, () => ({ seekTo: (sec: number) => playerRef.current?.seekTo(sec, true) }), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -107,6 +118,7 @@ export default function ClipPlayer({
           onReady: () => {
             const p = playerRef.current;
             if (!p || cancelled) return;
+            hideCaptions(p);
             readyRef.current = true;
             p.seekTo(begin, true);
             p.setPlaybackRate(latest.current.rate);
@@ -116,16 +128,18 @@ export default function ClipPlayer({
               if (!cancelled && !actual.current) latest.current.onPlayingChange(false);
             }, 1500);
             // Berhenti tepat di akhir baris + jeda aman, lalu kembali ke awal agar siap diputar ulang.
-            let ticks = 0;
             timer = setInterval(() => {
-              if (latest.current.onTime && ++ticks % 3 === 0) latest.current.onTime(p.getCurrentTime());
               if (p.getPlayerState() === 1 && p.getCurrentTime() >= finish) {
                 p.pauseVideo();
                 p.seekTo(begin, true);
               }
             }, CLIP_TICK_MS);
           },
-          onStateChange: (e: { data: number }) => report(e.data === 1),
+          onStateChange: (e: { data: number }) => {
+            // Modul subtitle baru dimuat saat video mulai diputar.
+            if (e.data === 1 && playerRef.current) hideCaptions(playerRef.current);
+            report(e.data === 1);
+          },
           onError: () => {
             setFailed(true);
             latest.current.onPlayingChange(false);

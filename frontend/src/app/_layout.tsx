@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { AuthProvider, useAuth } from '@/auth/AuthProvider';
-import { SongsProvider } from '@/features/songs/SongsProvider';
+import { initNotificationHandler } from '@/features/settings/notifications/scheduler';
 import { fontAssets } from '@/theme/fonts';
 import { ThemeProvider, useTheme } from '@/theme/ThemeProvider';
 
@@ -23,6 +23,10 @@ function RootStack() {
     if (ready) SplashScreen.hideAsync();
   }, [ready]);
 
+  useEffect(() => {
+    void initNotificationHandler();
+  }, []);
+
   if (!ready) return null;
 
   const signedIn = status === 'authenticated';
@@ -34,6 +38,7 @@ function RootStack() {
         <Stack.Protected guard={signedIn}>
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="add-song" options={{ animation: 'slide_from_bottom' }} />
+          <Stack.Screen name="deck/[id]" />
           <Stack.Screen name="study/[id]" options={{ animation: 'slide_from_bottom' }} />
         </Stack.Protected>
         <Stack.Protected guard={!signedIn}>
@@ -52,9 +57,7 @@ export default function RootLayout() {
       <QueryClientProvider client={queryClient}>
         <ThemeProvider>
           <AuthProvider>
-            <SongsProvider>
-              <RootStack />
-            </SongsProvider>
+            <RootStack />
           </AuthProvider>
         </ThemeProvider>
       </QueryClientProvider>

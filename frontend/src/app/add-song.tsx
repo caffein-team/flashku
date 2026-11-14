@@ -1,21 +1,53 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Image } from 'expo-image';
-import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useState } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import Animated, { FadeIn, FadeInDown, FadeOut, LinearTransition } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import axios from 'axios';
+
+import { getErrorMessage } from '@/api/client';
+import { songsApi } from '@/api/songs';
 import { Button } from '@/components/Button';
-import { useSongs } from '@/features/songs/SongsProvider';
+import { addSongToCache, songsKey, useSongsList } from '@/features/songs/queries';
 import { youtubeThumbnail } from '@/features/songs/thumbnail';
 import { fetchYouTubeInfo, parseYouTubeId } from '@/features/songs/youtube';
+import { goBack } from '@/lib/navigation';
 import { font } from '@/theme/fonts';
 import { useTheme } from '@/theme/ThemeProvider';
 
 const STEPS = ['Tempel link YouTube', 'AI memilih kosakata dari lirik', 'Belajar lewat flashcard'];
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Gateway (mis. Cloudflare 524 setelah ~100 dtk) memutus request padahal server masih bekerja. */
+function isCutOff(e: unknown): boolean {
+  if (!axios.isAxiosError(e)) return false;
+  const status = e.response?.status;
+  return !e.response || e.code === 'ECONNABORTED' || (!!status && [502, 504, 524].includes(status));
+}
+
+/** Request import bisa dipotong gateway sementara server tetap menyelesaikannya: tunggu lagunya muncul (±3 menit). */
+async function importWithRecovery(url: string, youtubeId: string | null, onWaiting: () => void) {
+  try {
+    return await songsApi.import(url);
+  } catch (e) {
+    if (!isCutOff(e) || !youtubeId) throw e;
+    onWaiting();
+    for (let i = 0; i < 36; i++) {
+      await sleep(5000);
+      try {
+        const { items } = await songsApi.list(100, 0);
+        const song = items.find((s) => s.youtubeId === youtubeId);
+        if (song) return { song, message: 'Lagu berhasil diimpor.' };
+      } catch {}
+    }
+    throw e;
+  }
+}
 
 function useDebounced<T>(value: T, ms: number) {
   const [v, setV] = useState(value);
@@ -29,7 +61,16 @@ function useDebounced<T>(value: T, ms: number) {
 export default function AddSongScreen() {
   const { colors, isDark } = useTheme();
   const insets = useSafeAreaInsets();
-  const { songs, addSong } = useSongs();
+  const qc = useQueryClient();
+  const library = useSongsList();
+  const [phase, setPhase] = useState<'idle' | 'import' | 'wait' | 'enrich'>('idle');
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   const [url, setUrl] = useState('');
   const [focused, setFocused] = useState(false);
@@ -38,7 +79,7 @@ export default function AddSongScreen() {
   const typed = url.trim().length > 0;
   const videoId = parseYouTubeId(debounced);
   const invalid = typed && debounced === url.trim() && !videoId;
-  const duplicate = !!videoId && songs.some((s) => s.id === videoId);
+  const duplicate = !!videoId && !!library.data?.pages.some((p) => p.items.some((s) => s.youtubeId === videoId));
 
   const info = useQuery({
     queryKey: ['youtube-info', videoId],
@@ -52,11 +93,33 @@ export default function AddSongScreen() {
   const found = !!videoId && !!info.data && debounced === url.trim();
   const canSave = found && !duplicate;
 
-  const save = () => {
-    if (!canSave || !videoId || !info.data) return;
-    addSong({ id: videoId, title: info.data.title, artist: info.data.author || 'Tidak diketahui' });
-    router.back();
-  };
+  const save = useMutation({
+    mutationFn: async () => {
+      setPhase('import');
+      const { song, message } = await importWithRecovery(url.trim(), videoId, () => setPhase('wait'));
+      let enrichNote: string | undefined;
+      if (song.lyricsStatus !== 'not_found') {
+        setPhase('enrich');
+        try {
+          await songsApi.enrich(song.id);
+        } catch {
+          enrichNote = 'Terjemahan AI belum berhasil dibuat, jadi arti kata mungkin masih kosong.';
+        }
+      }
+      return { song, message, enrichNote };
+    },
+    onSuccess: ({ song, message, enrichNote }) => {
+      addSongToCache(qc, song);
+      if (mounted.current) goBack('/songs');
+      Alert.alert('Lagu ditambahkan', [message, enrichNote].filter(Boolean).join('\n\n'));
+    },
+    onError: (e) => Alert.alert('Gagal menambah lagu', getErrorMessage(e)),
+    // Server bisa menyimpan lagu walau responsnya gagal, jadi daftar selalu dimuat ulang.
+    onSettled: () => {
+      setPhase('idle');
+      void qc.invalidateQueries({ queryKey: songsKey });
+    },
+  });
 
   let status: { icon: keyof typeof Ionicons.glyphMap; color: string; text: string } | null = null;
   if (typed) {
@@ -74,7 +137,7 @@ export default function AddSongScreen() {
     >
       <StatusBar style={isDark ? 'light' : 'dark'} />
       <View style={[styles.topBar, { paddingTop: insets.top + 12 }]}>
-        <Pressable hitSlop={12} onPress={() => router.back()} accessibilityRole="button" accessibilityLabel="Kembali">
+        <Pressable hitSlop={12} onPress={() => goBack('/songs')} accessibilityRole="button" accessibilityLabel="Kembali">
           <Ionicons name="chevron-back" size={26} color={colors.text} />
         </Pressable>
         <Text style={[styles.topTitle, { color: colors.text }]}>Tambah Lagu</Text>
@@ -157,9 +220,28 @@ export default function AddSongScreen() {
         </Animated.View>
       </ScrollView>
 
+      {phase !== 'idle' && (
+        <View style={styles.progress}>
+          <ActivityIndicator size="small" color={colors.primary} />
+          <Text style={[styles.progressText, { color: colors.textMuted }]}>
+            {phase === 'import'
+              ? 'Mengunduh audio dan mengambil lirik… ini bisa memakan waktu 1–2 menit.'
+              : phase === 'wait'
+                ? 'Server masih memproses lagu. Menunggu sampai selesai…'
+                : 'AI menerjemahkan lirik dan arti kata…'}
+          </Text>
+        </View>
+      )}
+
       <View style={[styles.actions, { paddingBottom: insets.bottom + 16 }]}>
-        <Button title="Kembali" variant="outline" onPress={() => router.back()} style={styles.actionBtn} />
-        <Button title="Simpan" onPress={save} disabled={!canSave} style={styles.actionBtn} />
+        <Button title="Kembali" variant="outline" onPress={() => goBack('/songs')} style={styles.actionBtn} />
+        <Button
+          title="Simpan"
+          onPress={() => save.mutate()}
+          disabled={!canSave}
+          loading={save.isPending}
+          style={styles.actionBtn}
+        />
       </View>
     </KeyboardAvoidingView>
   );
@@ -192,6 +274,8 @@ const styles = StyleSheet.create({
   stepNo: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   stepNoText: { fontFamily: font.bold, fontSize: 14 },
   stepText: { fontFamily: font.regular, fontSize: 15 },
+  progress: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 24, paddingTop: 8 },
+  progressText: { flex: 1, fontFamily: font.regular, fontSize: 13 },
   actions: { flexDirection: 'row', gap: 12, paddingHorizontal: 20, paddingTop: 12 },
   actionBtn: { flex: 1 },
 });

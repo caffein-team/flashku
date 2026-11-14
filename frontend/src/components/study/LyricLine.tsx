@@ -1,22 +1,18 @@
 import { StyleSheet, Text, View } from 'react-native';
 
-import type { Segment } from '@/features/study/deck';
+import type { Segment } from '@/features/study/cards';
 import { font } from '@/theme/fonts';
 import { useTheme } from '@/theme/ThemeProvider';
 
 type Props = {
   segments: Segment[];
-  /** Tampilkan furigana di atas kanji. */
   furigana?: boolean;
   size?: number;
-  /** Warna teks biasa; default mengikuti tema. */
   color?: string;
-  /** Beri warna dan garis bawah pada kata target. */
   highlight?: boolean;
   align?: 'center' | 'flex-start';
 };
 
-/** Satu baris lirik dengan furigana per potongan (ruby text). */
 export function LyricLine({ segments, furigana, size = 22, color, highlight = true, align = 'center' }: Props) {
   const { colors } = useTheme();
   const base = color ?? colors.text;

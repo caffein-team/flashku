@@ -2,13 +2,24 @@ import axios, { AxiosError } from 'axios';
 
 export const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'https://flashku.dewayani.web.id/api';
 
-// Token disimpan di memori supaya interceptor tidak perlu async.
-// AuthProvider yang mengisi dan membersihkannya.
+/** Origin server tanpa `/api`; file statis (thumbnail, audio, avatar) disajikan dari `/uploads/...`. */
+export const API_ORIGIN = API_URL.replace(/\/api\/?$/, '');
+
+export function assetUrl(path?: string | null): string | undefined {
+  if (!path) return undefined;
+  return /^https?:\/\//.test(path) ? path : `${API_ORIGIN}${path.startsWith('/') ? '' : '/'}${path}`;
+}
+
+// Token di memori supaya interceptor tidak perlu async; AuthProvider yang mengisinya.
 let accessToken: string | null = null;
 let onUnauthorized: (() => void) | null = null;
 
 export function setAccessToken(token: string | null) {
   accessToken = token;
+}
+
+export function getAccessToken(): string | null {
+  return accessToken;
 }
 
 export function setUnauthorizedHandler(handler: (() => void) | null) {
@@ -29,8 +40,7 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (res) => res,
   (error: AxiosError) => {
-    // 401 pada request yang membawa token = JWT kedaluwarsa/tidak valid.
-    // Hanya satu token, jadi tidak ada refresh: langsung keluar.
+    // 401 pada request bertoken = JWT habis; tanpa refresh token, langsung keluar.
     if (error.response?.status === 401 && accessToken) {
       onUnauthorized?.();
     }
@@ -61,7 +71,6 @@ export function getErrorMessage(error: unknown): string {
   if (axios.isAxiosError(error)) {
     if (!error.response) {
       const base = 'Tidak dapat terhubung ke server. Periksa koneksi internetmu.';
-      // Saat development, tampilkan URL dan kode error supaya penyebabnya mudah dilacak.
       return __DEV__ ? `${base}\n\n[${error.code ?? 'NO_RESPONSE'}] ${API_URL}` : base;
     }
     const body = getErrorBody(error);

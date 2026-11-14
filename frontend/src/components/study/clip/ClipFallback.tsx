@@ -10,17 +10,20 @@ export function ClipFrame({
   children,
   failed,
   message,
+  icon = 'musical-notes-outline',
 }: {
   children?: ReactNode;
   failed?: boolean;
   /** Teks di bawah ikon; default hanya muncul saat `failed`. */
   message?: string;
+  /** Ikon saat tidak gagal; bawaannya nada musik. */
+  icon?: keyof typeof Ionicons.glyphMap;
 }) {
   const { colors } = useTheme();
   return (
     <View style={[styles.frame, { backgroundColor: colors.banner }]}>
       <View style={styles.center}>
-        <Ionicons name={failed ? 'alert-circle-outline' : 'musical-notes-outline'} size={56} color={colors.primary} />
+        <Ionicons name={failed ? 'alert-circle-outline' : icon} size={56} color={colors.primary} />
         {(failed || !!message) && (
           <Text style={[styles.failed, { color: colors.bannerText }]}>{message ?? 'Video tidak dapat diputar'}</Text>
         )}

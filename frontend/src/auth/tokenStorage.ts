@@ -3,10 +3,7 @@ import { Platform } from 'react-native';
 
 const TOKEN_KEY = 'flashku.jwt';
 
-/**
- * Android: SecureStore (terenkripsi). Web: SecureStore tidak tersedia (modulnya kosong),
- * jadi memakai localStorage. Itu tidak seaman SecureStore, tapi browser tidak punya padanan yang aman.
- */
+/** SecureStore tidak ada di web (modulnya kosong); web memakai localStorage, yang kurang aman tapi tak ada padanannya. */
 const isWeb = Platform.OS === 'web';
 
 function webStorage(): Storage | null {

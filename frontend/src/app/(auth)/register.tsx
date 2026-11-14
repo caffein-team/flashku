@@ -12,7 +12,7 @@ import { FooterLink, GoogleButton, OrDivider, TempSkipButton } from '@/component
 import { AuthScreen } from '@/components/AuthScreen';
 import { Button } from '@/components/Button';
 import { TextField } from '@/components/TextField';
-import { OTP_ENABLED } from '@/lib/config';
+import { GOOGLE_AUTH_ENABLED, OTP_ENABLED } from '@/lib/config';
 import { registerSchema, type RegisterForm } from '@/lib/schemas';
 
 export default function RegisterScreen() {
@@ -47,7 +47,6 @@ export default function RegisterScreen() {
       else router.push({ pathname: '/verify-otp', params: { email } });
     },
     onError: (error) => {
-      // Tampilkan error validasi backend di field yang bersangkutan.
       const fieldErrors = getErrorBody(error).errors;
       if (fieldErrors) {
         const map = { name: 'username', email: 'email', password: 'password' } as const;
@@ -129,13 +128,17 @@ export default function RegisterScreen() {
       />
 
       <Button title="Daftar" loading={register.isPending} disabled={busy} onPress={submit} />
-      <OrDivider />
-      <GoogleButton
-        title="Daftar dengan Google"
-        onPress={google.signInWithGoogle}
-        loading={google.loading}
-        disabled={busy}
-      />
+      {GOOGLE_AUTH_ENABLED && (
+        <>
+          <OrDivider />
+          <GoogleButton
+            title="Daftar dengan Google"
+            onPress={google.signInWithGoogle}
+            loading={google.loading}
+            disabled={busy}
+          />
+        </>
+      )}
       <TempSkipButton />
     </AuthScreen>
   );

@@ -11,7 +11,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 
-import { songProgress, songStatus, type Song } from '@/features/songs/SongsProvider';
+import { LYRICS_STATUS_LABEL, formatDuration, type Song } from '@/api/songs';
 import { youtubeThumbnail } from '@/features/songs/thumbnail';
 import { font } from '@/theme/fonts';
 import { useTheme } from '@/theme/ThemeProvider';
@@ -19,22 +19,36 @@ import { useTheme } from '@/theme/ThemeProvider';
 type Props = {
   song: Song;
   index: number;
-  /** Mode pencarian: thumbnail jadi tombol play dan persentase muncul. */
+  /** Mode pencarian: thumbnail jadi tombol play. */
   expanded: boolean;
   playing: boolean;
   onTogglePlay: () => void;
-  /** Buka sesi flashcard lagu ini. */
   onOpen: () => void;
+  onLongPress?: () => void;
+  /** Mode multi-pilih: kartu menampilkan kotak centang. */
+  selectMode?: boolean;
+  selected?: boolean;
+  /** Tombol hapus di pojok kanan atas kartu; hanya tampil bila diisi. */
+  onRemove?: () => void;
+  removeLabel?: string;
 };
 
 const EASE = Easing.out(Easing.cubic);
 
-export function SongCard({ song, index, expanded, playing, onTogglePlay, onOpen }: Props) {
+export function SongCard({
+  song,
+  index,
+  expanded,
+  playing,
+  onTogglePlay,
+  onOpen,
+  onLongPress,
+  selectMode,
+  selected,
+  onRemove,
+  removeLabel = 'Hapus',
+}: Props) {
   const { colors } = useTheme();
-  const progress = songProgress(song);
-  const status = songStatus(song);
-  const pct = Math.round(progress * 100);
-  const preparing = song.total === 0;
   const isPlaying = expanded && playing;
 
   // 0 = tampilan biasa, 1 = mode pencarian
@@ -42,12 +56,6 @@ export function SongCard({ song, index, expanded, playing, onTogglePlay, onOpen 
   useEffect(() => {
     exp.value = withTiming(expanded ? 1 : 0, { duration: 300, easing: EASE });
   }, [expanded, exp]);
-
-  // Isi progress bar tumbuh dari 0 saat pertama tampil.
-  const fill = useSharedValue(0);
-  useEffect(() => {
-    fill.value = withTiming(progress, { duration: 600, easing: EASE });
-  }, [progress, fill]);
 
   const play = useSharedValue(isPlaying ? 1 : 0);
   useEffect(() => {
@@ -62,24 +70,16 @@ export function SongCard({ song, index, expanded, playing, onTogglePlay, onOpen 
     transform: [{ scale: 0.7 + 0.3 * exp.value }],
   }));
   const cardStyle = useAnimatedStyle(() => ({
-    borderColor: interpolateColor(play.value, [0, 1], ['transparent', colors.primary]),
+    borderColor: selected ? colors.primary : interpolateColor(play.value, [0, 1], ['transparent', colors.primary]),
   }));
-  const pctStyle = useAnimatedStyle(() => ({ opacity: exp.value }));
-  const barFill = useAnimatedStyle(() => ({
-    width: `${fill.value * 100}%`,
-    backgroundColor:
-      status === 'done'
-        ? interpolateColor(exp.value, [0, 1], [colors.primary, colors.success])
-        : colors.primary,
-  }));
-
   return (
     <Animated.View
       entering={index < 8 ? FadeInDown.delay(index * 60).duration(350) : undefined}
       style={[styles.card, { backgroundColor: colors.surface }, cardStyle]}
     >
       <Pressable
-        onPress={expanded ? onTogglePlay : onOpen}
+        onPress={expanded && !selectMode ? onTogglePlay : onOpen}
+        onLongPress={onLongPress}
         accessibilityRole="button"
         accessibilityLabel={expanded ? (isPlaying ? 'Jeda lagu' : 'Putar lagu') : `Pelajari ${song.title}`}
       >
@@ -88,7 +88,7 @@ export function SongCard({ song, index, expanded, playing, onTogglePlay, onOpen 
             <Ionicons name="musical-notes-outline" size={30} color={colors.link} />
           </View>
           <Image
-            source={{ uri: youtubeThumbnail(song.id) }}
+            source={{ uri: song.thumbnail ?? youtubeThumbnail(song.youtubeId) }}
             style={StyleSheet.absoluteFill}
             contentFit="cover"
             transition={200}
@@ -104,15 +104,25 @@ export function SongCard({ song, index, expanded, playing, onTogglePlay, onOpen 
               <Ionicons name={isPlaying ? 'pause' : 'play'} size={18} color={colors.primary} />
             </View>
           </Animated.View>
-          {!!song.duration && (
+          {selectMode && (
+            <View
+              style={[
+                styles.check,
+                selected ? { backgroundColor: colors.primary, borderColor: colors.primary } : { borderColor: '#fff' },
+              ]}
+            >
+              {selected && <Ionicons name="checkmark" size={14} color="#fff" />}
+            </View>
+          )}
+          {song.durationSec > 0 && (
             <View style={styles.duration}>
-              <Text style={styles.durationText}>{song.duration}</Text>
+              <Text style={styles.durationText}>{formatDuration(song.durationSec)}</Text>
             </View>
           )}
         </View>
       </Pressable>
 
-      <Pressable style={styles.info} onPress={onOpen} accessibilityRole="button" accessibilityLabel={`Pelajari ${song.title}`}>
+      <Pressable style={[styles.info, (!!onRemove || song.isFavorite) && styles.infoRemovable]} onPress={onOpen} onLongPress={onLongPress} accessibilityRole="button" accessibilityLabel={`Pelajari ${song.title}`}>
         <Text style={[styles.title, { color: colors.text }]} numberOfLines={1}>
           {song.title}
         </Text>
@@ -127,24 +137,31 @@ export function SongCard({ song, index, expanded, playing, onTogglePlay, onOpen 
             </Animated.View>
           )}
         </View>
-        <View style={[styles.track, { backgroundColor: colors.track }]}>
-          <Animated.View style={[styles.fill, barFill]} />
-        </View>
-        <View style={styles.metaRow}>
-          <Text style={[styles.meta, { color: colors.textMuted }]} numberOfLines={1}>
-            {preparing ? 'Kosakata sedang disiapkan' : `${song.learned} dari ${song.total} kosakata`}
-          </Text>
-          {!preparing && (
-            <Animated.View style={pctStyle}>
-              {status === 'done' ? (
-                <Text style={[styles.pct, { color: colors.success }]}>✓ Selesai</Text>
-              ) : (
-                <Text style={[styles.pct, { color: colors.primary }]}>{pct}%</Text>
-              )}
-            </Animated.View>
-          )}
-        </View>
+        <Text
+          style={[styles.meta, { color: song.lyricsStatus === 'not_found' ? colors.danger : colors.textMuted }]}
+          numberOfLines={1}
+        >
+          {LYRICS_STATUS_LABEL[song.lyricsStatus]}
+        </Text>
       </Pressable>
+
+      {song.isFavorite && (
+        <View style={styles.favorite} pointerEvents="none" accessibilityLabel="Favorit">
+          <Ionicons name="heart" size={16} color={colors.primary} />
+        </View>
+      )}
+
+      {onRemove && (
+        <Pressable
+          onPress={onRemove}
+          hitSlop={6}
+          accessibilityRole="button"
+          accessibilityLabel={removeLabel}
+          style={({ pressed }) => [styles.remove, pressed && { backgroundColor: colors.dangerSoft }]}
+        >
+          <Ionicons name="trash-outline" size={18} color={colors.danger} />
+        </Pressable>
+      )}
     </Animated.View>
   );
 }
@@ -178,16 +195,36 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 2,
   },
+  check: {
+    position: 'absolute',
+    top: 6,
+    left: 6,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.25)',
+  },
   durationText: { color: '#fff', fontFamily: font.bold, fontSize: 11 },
   info: { flex: 1, gap: 4 },
+  infoRemovable: { paddingRight: 26 },
+  favorite: { position: 'absolute', right: 12, bottom: 10 },
+  remove: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   title: { fontFamily: font.bold, fontWeight: '700', fontSize: 15.5 },
   artistRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   artist: { fontFamily: font.regular, fontSize: 13.5, flexShrink: 1 },
   nowPlaying: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   nowPlayingText: { fontFamily: font.bold, fontSize: 12 },
-  track: { height: 6, borderRadius: 3, overflow: 'hidden', marginTop: 2 },
-  fill: { height: '100%', borderRadius: 3 },
-  metaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  meta: { fontFamily: font.regular, fontSize: 12.5, flexShrink: 1 },
-  pct: { fontFamily: font.bold, fontSize: 12.5 },
+  meta: { fontFamily: font.regular, fontSize: 12.5, marginTop: 2 },
 });

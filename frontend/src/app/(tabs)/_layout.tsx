@@ -36,9 +36,9 @@ export default function TabsLayout() {
     >
       <Tabs.Screen name="index" options={{ title: 'Beranda', tabBarIcon: tabIcon('home-outline') }} />
       <Tabs.Screen name="songs" options={{ title: 'Lagu', tabBarIcon: tabIcon('musical-notes-outline') }} />
-      <Tabs.Screen name="leaderboard" options={{ title: 'Peringkat', tabBarIcon: tabIcon('trophy-outline') }} />
-      <Tabs.Screen name="history" options={{ title: 'Riwayat', tabBarIcon: tabIcon('time-outline') }} />
-      <Tabs.Screen name="settings" options={{ title: 'Pengaturan', tabBarIcon: tabIcon('options-outline') }} />
+      <Tabs.Screen name="deck" options={{ title: 'Deck', tabBarIcon: tabIcon('copy-outline') }} />
+      <Tabs.Screen name="statistik" options={{ title: 'Statistik', tabBarIcon: tabIcon('bar-chart-outline') }} />
+      <Tabs.Screen name="settings" options={{ title: 'Pengaturan', tabBarIcon: tabIcon('options-outline'), popToTopOnBlur: true }} />
     </Tabs>
   );
 }

@@ -30,10 +30,7 @@ type Props = {
 const BAR = 46;
 const SIDE = 24;
 
-/**
- * Header ungu: judul "FlashKu" + tombol search. Saat tombol ditekan, tombol melebar
- * menjadi kolom pencarian dan judul memudar (satu nilai progress 0→1 mengatur semuanya).
- */
+/** Satu nilai progress 0→1 mengatur judul, kolom pencarian, dan padding header. */
 export function SongsHeader({ expanded, onOpen, onClose, query, onChangeQuery, scrollY }: Props) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -53,7 +50,7 @@ export function SongsHeader({ expanded, onOpen, onClose, query, onChangeQuery, s
   const maxWidth = width - SIDE * 2;
 
   const containerStyle = useAnimatedStyle(() => {
-    const compact = clamp(scrollY.value, 0, 40) / 40; // memadat saat scroll
+    const compact = clamp(scrollY.value, 0, 40) / 40;
     return {
       paddingBottom: interpolate(p.value, [0, 1], [22, 32]) - compact * 8,
       boxShadow: `0 ${4 * compact}px ${14 * compact}px rgba(30, 20, 120, ${0.3 * compact})`,

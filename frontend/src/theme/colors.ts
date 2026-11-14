@@ -1,6 +1,6 @@
 export type Colors = {
   primary: string;
-  primaryText: string; // teks di atas warna primary
+  primaryText: string;
   link: string;
   background: string;
   surface: string;

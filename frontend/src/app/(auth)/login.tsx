@@ -7,6 +7,7 @@ import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { authApi } from '@/api/auth';
 import { getErrorBody, getErrorMessage, getErrorStatus } from '@/api/client';
 import { useAuth } from '@/auth/AuthProvider';
+import { GOOGLE_AUTH_ENABLED } from '@/lib/config';
 import { useGoogleSignIn } from '@/auth/useGoogleSignIn';
 import { FooterLink, GoogleButton, OrDivider, TempSkipButton } from '@/components/AuthExtras';
 import { AuthScreen } from '@/components/AuthScreen';
@@ -104,13 +105,17 @@ export default function LoginScreen() {
       </View>
 
       <Button title="Masuk" loading={login.isPending} disabled={busy} onPress={handleSubmit((v) => login.mutate(v))} />
-      <OrDivider />
-      <GoogleButton
-        title="Lanjutkan dengan Google"
-        onPress={google.signInWithGoogle}
-        loading={google.loading}
-        disabled={busy}
-      />
+      {GOOGLE_AUTH_ENABLED && (
+        <>
+          <OrDivider />
+          <GoogleButton
+            title="Lanjutkan dengan Google"
+            onPress={google.signInWithGoogle}
+            loading={google.loading}
+            disabled={busy}
+          />
+        </>
+      )}
       <TempSkipButton />
     </AuthScreen>
   );

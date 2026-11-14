@@ -1,141 +1,169 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { PanResponder, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 
-import type { Flashcard } from '@/features/study/deck';
+import { usePreferences } from '@/features/settings/preferences';
+import type { Flashcard } from '@/features/study/cards';
+import { shiftOffset, STEP, type Clip } from '@/features/study/clipOffsets';
 import { font } from '@/theme/fonts';
 import { useTheme } from '@/theme/ThemeProvider';
-import type { ClipPlayerHandle } from './clip/config';
 import { ClipFrame } from './clip/ClipFallback';
 import ClipPlayer from './clip/ClipPlayer';
-import { ClipTuner, type Clip } from './clip/ClipTuner';
 import { LyricLine } from './LyricLine';
 
 type Media = 'video' | 'illustration';
 const SPEEDS = [0.5, 0.75, 1, 1.25] as const;
 
-/** Sisi belakang kartu: potongan lagu (video/ilustrasi), arti kata, dan baris lirik lengkap dengan furigana. */
-export function AnswerView({ card, videoId }: { card: Flashcard; videoId: string }) {
+type Props = {
+  card: Flashcard;
+  /** Klip yang diputar, sudah termasuk geseran dari user. */
+  clip?: Clip;
+  videoId: string;
+  /** Geseran klip lagu ini (detik) dan pengubahnya; berlaku untuk semua kartu lagu. */
+  offset: number;
+  onOffsetChange: (offset: number) => Promise<void>;
+};
+
+/** "+1,50 detik" / "-0,25 detik" / "0,00 detik". */
+const formatOffset = (v: number) => `${v > 0 ? '+' : ''}${v.toFixed(2).replace('.', ',')} detik`;
+/** Jeda sebelum geseran dipakai pemutar; tiap pakai memuat ulang video, jadi ketukan beruntun digabung. */
+const OFFSET_APPLY_MS = 600;
+
+export function AnswerView({ card, clip, videoId, offset, onOffsetChange }: Props) {
   const { colors } = useTheme();
+  const { showRomaji } = usePreferences();
   const [media, setMedia] = useState<Media>('video');
-  const [playing, setPlaying] = useState(!!card.clip);
-  const [liked, setLiked] = useState(false);
+  const [playing, setPlaying] = useState(!!clip);
+
+  // Klip digeser dari sheet Atur klip: putar ulang dari awal yang baru.
+  const clipKey = clip ? `${clip.startSec}:${clip.endSec}` : '';
+  const [seenClipKey, setSeenClipKey] = useState(clipKey);
+  if (seenClipKey !== clipKey) {
+    setSeenClipKey(clipKey);
+    setPlaying(!!clip);
+  }
   const [speedIdx, setSpeedIdx] = useState(2);
 
-  // Alat penentu klip (hanya dev): putar video penuh, tandai baris, coba hasilnya.
-  const [tuning, setTuning] = useState(false);
-  const [time, setTime] = useState(0);
-  const [tried, setTried] = useState<Clip | null>(null);
-  const handleRef = useRef<ClipPlayerHandle>(null);
-  const clip = tried ?? card.clip;
-  const showPlayer = media === 'video' && (tuning || !!clip);
+  const swipe = useMemo(
+    () =>
+      PanResponder.create({
+      onMoveShouldSetPanResponder: (_e, g) => Math.abs(g.dx) > 12 && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
+      onPanResponderRelease: (_e, g) => {
+        if (Math.abs(g.dx) < 40) return;
+        const next: Media = g.dx < 0 ? 'illustration' : 'video';
+        setMedia(next);
+        setPlaying(next === 'video');
+      },
+    }),
+    [],
+  );
+
+  const [draft, setDraft] = useState(offset);
+  const applyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (applyTimer.current) clearTimeout(applyTimer.current);
+    },
+    [],
+  );
+  const nudge = (delta: number) => {
+    const next = shiftOffset(draft, delta);
+    if (next === draft) return;
+    setDraft(next);
+    if (applyTimer.current) clearTimeout(applyTimer.current);
+    // Gagal disimpan: tampilan kembali ke nilai di server (pesan error ditampilkan oleh pemanggil).
+    applyTimer.current = setTimeout(() => void onOffsetChange(next).catch(() => setDraft(offset)), OFFSET_APPLY_MS);
+  };
 
   const pill = { backgroundColor: colors.surface, borderColor: colors.border };
 
   return (
     <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-      <Animated.View entering={FadeIn.duration(250)} style={[styles.tabs, pill]}>
-        <Tab
-          label="Video"
-          icon="videocam-outline"
-          active={media === 'video'}
-          onPress={() => {
-            setMedia('video');
-            setPlaying(true);
-          }}
-        />
-        <Tab
-          label="Ilustrasi"
-          icon="image-outline"
-          active={media === 'illustration'}
-          onPress={() => {
-            setMedia('illustration');
-            setPlaying(false);
-          }}
-        />
-      </Animated.View>
+      {/* Penunjuk saja: geser video ke kiri/kanan untuk berpindah. */}
+      <View style={styles.dots} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+        {(['video', 'illustration'] as const).map((m) => (
+          <View
+            key={m}
+            style={[styles.pageDot, { backgroundColor: m === media ? colors.primary : colors.border }]}
+          />
+        ))}
+      </View>
 
-      <Animated.View entering={FadeIn.duration(250).delay(40)}>
-        {showPlayer ? (
+      <Animated.View entering={FadeIn.duration(250).delay(40)} {...swipe.panHandlers}>
+        {media === 'video' && clip ? (
           <ClipPlayer
-            key={tuning ? 'tune' : 'clip'}
+            key={clipKey}
             videoId={videoId}
-            startSec={tuning || !clip ? 0 : clip.startSec}
-            endSec={tuning || !clip ? 100000 : clip.endSec}
+            startSec={clip.startSec}
+            endSec={clip.endSec}
             playing={playing}
             rate={SPEEDS[speedIdx]}
             onPlayingChange={setPlaying}
-            onTime={tuning ? setTime : undefined}
-            handleRef={handleRef}
           />
         ) : (
           // Ilustrasi: TODO dari backend. Video: klip baris ini belum diketahui.
-          <ClipFrame message={media === 'video' ? 'Klip untuk baris ini belum tersedia' : undefined} />
+          <ClipFrame
+            icon={media === 'illustration' ? 'image-outline' : undefined}
+            message={media === 'video' ? 'Klip untuk baris ini belum tersedia' : undefined}
+          />
         )}
       </Animated.View>
 
       <View style={styles.controls}>
-        <Pressable
-          style={[styles.sidePill, pill]}
-          onPress={() => setLiked((v) => !v)}
-          accessibilityRole="button"
-          accessibilityLabel="Favorit"
-        >
-          <Ionicons name={liked ? 'heart' : 'heart-outline'} size={22} color={colors.primary} />
-        </Pressable>
-        <Pressable
-          style={[styles.play, { backgroundColor: colors.primary }]}
-          onPress={() => setPlaying((v) => !v)}
-          accessibilityRole="button"
-          accessibilityLabel={playing ? 'Jeda' : 'Putar'}
-        >
-          <Ionicons name={playing ? 'pause' : 'play'} size={26} color="#fff" />
-        </Pressable>
-        <Pressable
-          style={[styles.sidePill, pill]}
-          onPress={() => setSpeedIdx((i) => (i + 1) % SPEEDS.length)}
-          accessibilityRole="button"
-          accessibilityLabel="Kecepatan"
-        >
-          <Text style={[styles.speed, { color: colors.primary }]}>{SPEEDS[speedIdx]}x</Text>
-        </Pressable>
+        <View style={styles.tools}>
+          <View style={[styles.stepper, pill]}>
+            <Pressable
+              style={[styles.step, { backgroundColor: colors.surfaceMuted }]}
+              onPress={() => nudge(-STEP)}
+              accessibilityRole="button"
+              accessibilityLabel={`Klip lebih awal ${STEP} detik`}
+            >
+              <Ionicons name="remove" size={18} color={colors.primary} />
+            </Pressable>
+            <Text style={[styles.offset, { color: colors.text }]} accessibilityLabel={`Geseran klip ${formatOffset(draft)}`}>
+              {formatOffset(draft)}
+            </Text>
+            <Pressable
+              style={[styles.step, { backgroundColor: colors.surfaceMuted }]}
+              onPress={() => nudge(STEP)}
+              accessibilityRole="button"
+              accessibilityLabel={`Klip lebih lambat ${STEP} detik`}
+            >
+              <Ionicons name="add" size={18} color={colors.primary} />
+            </Pressable>
+          </View>
+          <Pressable
+            style={[styles.sidePill, pill]}
+            onPress={() => setSpeedIdx((i) => (i + 1) % SPEEDS.length)}
+            accessibilityRole="button"
+            accessibilityLabel="Kecepatan"
+          >
+            <Text style={[styles.speed, { color: colors.primary }]}>{SPEEDS[speedIdx]}x</Text>
+          </Pressable>
+        </View>
+        <View style={styles.playWrap}>
+          <Pressable
+            style={[styles.play, { backgroundColor: colors.primary }]}
+            onPress={() => setPlaying((v) => !v)}
+            accessibilityRole="button"
+            accessibilityLabel={playing ? 'Jeda' : 'Putar'}
+          >
+            <Ionicons name={playing ? 'pause' : 'play'} size={26} color="#fff" />
+          </Pressable>
+        </View>
       </View>
-
-      {__DEV__ && media === 'video' && (
-        <Pressable
-          onPress={() => {
-            setTuning((t) => !t);
-            setPlaying(tuning); // masuk mode atur: mulai dijeda; keluar: putar klip
-            setTime(0);
-          }}
-          style={styles.devToggle}
-          accessibilityRole="button"
-        >
-          <Text style={[styles.devToggleText, { color: colors.textMuted }]}>
-            {tuning ? 'Tutup penentu klip' : 'Atur klip (dev)'}
-          </Text>
-        </Pressable>
-      )}
-      {__DEV__ && tuning && (
-        <ClipTuner
-          time={time}
-          onSeek={(sec) => handleRef.current?.seekTo(sec)}
-          onTry={(c) => {
-            setTried(c);
-            setTuning(false);
-            setPlaying(true);
-          }}
-        />
-      )}
 
       <Animated.View
         entering={FadeInDown.duration(300).delay(80)}
         style={[styles.card, styles.wordCard, { backgroundColor: colors.surface, borderColor: colors.border }]}
       >
         <Text style={[styles.reading, { color: colors.text }]}>{card.reading}</Text>
+        {showRomaji && !!card.romaji && (
+          <Text style={[styles.romaji, { color: colors.textMuted }]}>{card.romaji}</Text>
+        )}
         <Text style={[styles.word, { color: colors.primary }]}>{card.word}</Text>
-        <Text style={[styles.meaning, { color: colors.textMuted }]}>{card.meaning}</Text>
+        <Text style={[styles.meaning, { color: colors.textMuted }]}>{card.meaning ?? 'Arti belum tersedia'}</Text>
       </Animated.View>
 
       <Animated.View
@@ -146,44 +174,19 @@ export function AnswerView({ card, videoId }: { card: Flashcard; videoId: string
           <View style={styles.lyricLeft}>
             <LyricLine segments={card.line} furigana size={22} align="flex-start" />
           </View>
-          <Text style={[styles.translation, { color: colors.text }]}>{card.translation}</Text>
+          <Text style={[styles.translation, { color: card.translation ? colors.text : colors.textMuted }]}>
+            {card.translation ?? 'Terjemahan belum tersedia'}
+          </Text>
         </View>
       </Animated.View>
     </ScrollView>
   );
 }
 
-function Tab({
-  label,
-  icon,
-  active,
-  onPress,
-}: {
-  label: string;
-  icon: keyof typeof Ionicons.glyphMap;
-  active: boolean;
-  onPress: () => void;
-}) {
-  const { colors } = useTheme();
-  const fg = active ? colors.primaryText : colors.primary;
-  return (
-    <Pressable
-      onPress={onPress}
-      accessibilityRole="button"
-      accessibilityState={{ selected: active }}
-      style={[styles.tab, { backgroundColor: active ? colors.primary : colors.surfaceMuted }]}
-    >
-      <Ionicons name={icon} size={18} color={fg} />
-      <Text style={[styles.tabText, { color: fg }]}>{label}</Text>
-    </Pressable>
-  );
-}
-
 const styles = StyleSheet.create({
   content: { paddingHorizontal: 16, paddingBottom: 24, gap: 12 },
-  tabs: { flexDirection: 'row', gap: 6, padding: 4, borderRadius: 24, borderWidth: 1 },
-  tab: { flex: 1, height: 38, borderRadius: 19, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
-  tabText: { fontFamily: font.bold, fontSize: 14 },
+  dots: { flexDirection: 'row', justifyContent: 'center', gap: 8 },
+  pageDot: { width: 8, height: 8, borderRadius: 4 },
   media: { height: 186, borderRadius: 26, alignItems: 'center', justifyContent: 'center' },
   badge: {
     position: 'absolute',
@@ -199,15 +202,19 @@ const styles = StyleSheet.create({
   },
   dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#E53935' },
   badgeText: { fontFamily: font.bold, fontSize: 12, color: '#222' },
-  devToggle: { alignSelf: 'center', paddingVertical: 2 },
-  devToggleText: { fontFamily: font.medium, fontSize: 12, textDecorationLine: 'underline' },
-  controls: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 18 },
+  controls: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  tools: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   sidePill: { width: 62, height: 40, borderRadius: 20, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   speed: { fontFamily: font.bold, fontSize: 14 },
+  stepper: { flexDirection: 'row', alignItems: 'center', gap: 6, height: 44, borderRadius: 22, borderWidth: 1, paddingHorizontal: 4 },
+  step: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  offset: { minWidth: 70, textAlign: 'center', fontFamily: font.bold, fontSize: 12 },
+  playWrap: { flex: 1, alignItems: 'center' },
   play: { width: 58, height: 58, borderRadius: 29, alignItems: 'center', justifyContent: 'center' },
   card: { borderRadius: 26, borderWidth: 1, padding: 12 },
   wordCard: { alignItems: 'center', paddingVertical: 18 },
   reading: { fontFamily: font.bold, fontWeight: '700', fontSize: 20 },
+  romaji: { fontFamily: font.medium, fontSize: 15 },
   word: { fontFamily: font.extrabold, fontWeight: '800', fontSize: 64, lineHeight: 80 },
   meaning: { fontFamily: font.regular, fontSize: 20 },
   lyricBox: { borderRadius: 18, paddingHorizontal: 14, paddingVertical: 12, gap: 4 },

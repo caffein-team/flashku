@@ -9,10 +9,7 @@ type GoogleModule = typeof import('@react-native-google-signin/google-signin');
 
 let googleModule: GoogleModule | null = null;
 
-/**
- * Module native Google Sign-In di-load saat dipakai, bukan saat app start.
- * Di Expo Go modul ini tidak ada dan meng-import-nya di top-level akan membuat app crash.
- */
+/** Dimuat saat dipakai: di Expo Go modul native ini tidak ada, dan import top-level membuat app crash. */
 function loadGoogle(): GoogleModule | null {
   if (googleModule) return googleModule;
   try {

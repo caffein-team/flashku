@@ -1,20 +1,19 @@
-import type { Ref } from 'react';
-
-/**
- * Jeda aman di sekitar baris lirik. Timestamp baris biasanya tepat di onset/akhir vokal,
- * sehingga tanpa jeda ini konsonan awal atau napas akhir ikut terpotong.
- */
+/** Jeda aman di sekitar baris lirik; tanpa itu konsonan awal atau napas akhir ikut terpotong. */
 export const CLIP_PAD_BEFORE = 0.25;
 export const CLIP_PAD_AFTER = 0.35;
 
-/** Seberapa sering pemutar mengecek posisi waktu (ms). Menentukan seberapa presisi klip berhenti. */
+/** Interval pengecekan posisi (ms); menentukan presisi berhentinya klip. */
 export const CLIP_TICK_MS = 50;
 
-/** Kendali imperatif pemutar, dipakai alat penentu timestamp (dev). */
-export type ClipPlayerHandle = { seekTo: (sec: number) => void };
+/** Fade in di awal dan fade out di akhir klip (detik), supaya potongan tidak berbunyi "klik". */
+export const CLIP_FADE_SEC = 0.25;
+
+/** Volume 0..1 pada posisi `t`: naik linear di awal jendela klip, turun linear di akhir. */
+export function clipGain(t: number, begin: number, finish: number) {
+  return Math.max(0, Math.min(1, (t - begin) / CLIP_FADE_SEC, (finish - t) / CLIP_FADE_SEC));
+}
 
 export type ClipPlayerProps = {
-  /** ID video YouTube. */
   videoId: string;
   /** Awal dan akhir baris lirik (detik) pada video. Jeda aman ditambahkan oleh pemutar. */
   startSec: number;
@@ -24,9 +23,6 @@ export type ClipPlayerProps = {
   /** Kecepatan putar: 0.5, 0.75, 1, atau 1.25. */
   rate: number;
   onPlayingChange: (playing: boolean) => void;
-  /** Opsional: laporan posisi video (detik) ~tiap 150 ms. Dipakai alat penentu timestamp. */
-  onTime?: (sec: number) => void;
-  handleRef?: Ref<ClipPlayerHandle>;
 };
 
 export function clipWindow(startSec: number, endSec: number) {

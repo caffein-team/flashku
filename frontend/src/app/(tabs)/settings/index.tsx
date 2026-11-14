@@ -1,4 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
+import { Image } from "expo-image";
+import { router, type Href } from "expo-router";
 import {
   Alert,
   Pressable,
@@ -8,9 +10,13 @@ import {
   View,
 } from "react-native";
 
+import { assetUrl } from "@/api/client";
 import { useAuth } from "@/auth/AuthProvider";
 import { Button } from "@/components/Button";
+import { DevTokenCard } from "@/components/settings/DevTokenCard";
 import { PageHeader } from "@/components/PageHeader";
+import { ToggleRow } from "@/components/settings/SettingsUI";
+import { setPreference, usePreferences } from "@/features/settings/preferences";
 import { font } from "@/theme/fonts";
 import { useTheme, type ThemeMode } from "@/theme/ThemeProvider";
 
@@ -20,6 +26,8 @@ const THEME_OPTIONS: { mode: ThemeMode; label: string }[] = [
   { mode: "system", label: "Sistem" },
 ];
 
+const go = (path: string) => router.push(path as Href);
+
 function soon() {
   Alert.alert("Segera hadir", "Fitur ini belum tersedia.");
 }
@@ -27,6 +35,7 @@ function soon() {
 export default function SettingsScreen() {
   const { colors, mode, setMode } = useTheme();
   const { user, signOut } = useAuth();
+  const { showRomaji } = usePreferences();
 
   const displayName = user?.username ?? user?.name ?? "Nama pengguna";
   const email = user?.email ?? "";
@@ -52,6 +61,9 @@ export default function SettingsScreen() {
             <Text style={styles.avatarText}>
               {displayName.charAt(0).toUpperCase()}
             </Text>
+            {!!user?.picture && (
+              <Image source={{ uri: assetUrl(user.picture) }} style={StyleSheet.absoluteFill} contentFit="cover" />
+            )}
           </View>
           <View style={styles.flex}>
             <Text
@@ -69,7 +81,7 @@ export default function SettingsScreen() {
               </Text>
             )}
           </View>
-          <Pressable hitSlop={8} onPress={soon}>
+          <Pressable hitSlop={8} onPress={() => go("/settings/profil")}>
             <Text style={[styles.link, { color: colors.link }]}>Edit</Text>
           </Pressable>
         </View>
@@ -113,8 +125,15 @@ export default function SettingsScreen() {
             Umum
           </Text>
           <Row label="Bahasa" value="Indonesia" onPress={soon} />
-          <Row label="Profil" onPress={soon} />
-          <Row label="Notifikasi" onPress={soon} last />
+          <ToggleRow
+            first={false}
+            title="Tampilkan romaji"
+            subtitle="Cara baca huruf latin di kartu jawaban"
+            value={showRomaji}
+            onChange={(v) => setPreference("showRomaji", v)}
+          />
+          <Row label="Profil" onPress={() => go("/settings/profil")} />
+          <Row label="Notifikasi" onPress={() => go("/settings/notifikasi")} last />
         </View>
 
         {/* Donate Button */}
@@ -127,6 +146,9 @@ export default function SettingsScreen() {
           </View>
           <Button title="Donasi" onPress={soon} style={styles.donate} />
         </View> */}
+
+        {/* SEMENTARA: hapus sebelum rilis */}
+        <DevTokenCard />
 
         <Button title="Keluar" variant="outline" onPress={confirmSignOut} />
       </ScrollView>
@@ -174,6 +196,7 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     alignItems: "center",
     justifyContent: "center",
+    overflow: "hidden",
   },
   avatarText: { fontFamily: font.bold, fontSize: 20, color: "#fff" },
   name: { fontFamily: font.bold, fontSize: 16 },
