@@ -63,8 +63,10 @@ export function getPhraseWeight(pos?: string | null): number {
 }
 
 /**
- * Validates whether a phrase is a meaningful linguistic token for flashcard study,
- * rejecting empty strings, standalone punctuation, pure symbols, or standalone choonpu marks.
+ * Validates whether a phrase is an authentic Japanese linguistic token for flashcard study,
+ * rejecting empty strings, standalone punctuation, pure symbols, standalone choonpu marks,
+ * and English/Latin words (e.g. "love", "baby", "stay", "yeah").
+ * Flashcards will strictly contain Japanese characters (Kanji, Hiragana, or Katakana).
  */
 export function isMeaningfulPhrase(phrase?: {
     surface_form?: string;
@@ -84,8 +86,10 @@ export function isMeaningfulPhrase(phrase?: {
     const stripped = surface.replace(/[\s\u30FC]/gu, "");
     if (!stripped) return false;
 
-    // Must contain at least one linguistic letter (Kanji, Hiragana, Katakana, Latin, etc.)
-    return /\p{L}/u.test(stripped);
+    // Must contain authentic Japanese writing characters:
+    // Kanji (\p{Script=Han}), Hiragana (\p{Script=Hiragana}), or Katakana (\p{Script=Katakana}).
+    // This strictly excludes English / Latin words ("love", "baby", "stay", "yeah", etc.)
+    return /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}]/u.test(stripped);
 }
 
 let tokenizerPromise: Promise<Tokenizer<any>> | null = null;
