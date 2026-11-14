@@ -157,6 +157,7 @@ function buildBaseYtDlpArgs(cookieFile: string | null): string[] {
         "--no-warnings",
         "--remote-components", "ejs:github",
         "--js-runtimes", `node:${process.execPath}`,
+        "--extractor-args", "youtube:player_client=android,web",
         "--user-agent", process.env.YOUTUBE_USER_AGENT || "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
     ];
 
