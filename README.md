@@ -12,7 +12,7 @@ Belajar kosakata bahasa Jepang dari lagu YouTube favoritmu, lewat flashcard yang
 
 ## Tim
 
-**Nama tim:** [Nama Tim]
+**Nama tim:** Caffein
 
 | Nama                          | Peran                           |
 | ----------------------------- | ------------------------------- |
