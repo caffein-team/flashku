@@ -614,7 +614,7 @@ export const swaggerSpec = {
         "/api/study/session": {
             post: {
                 tags: ["Study & SRS Flashcards"],
-                summary: "Create a new flashcard study session with due Japanese phrases",
+                summary: "Retrieve an adaptive flashcard (1 card per request) tailored to user's daily reviews with AI difficulty decision & clip variety",
                 security: [{ BearerAuth: [] }],
                 requestBody: {
                     content: {
@@ -624,14 +624,57 @@ export const swaggerSpec = {
                                 properties: {
                                     song_id: { type: "string", example: "673000000000000000000000" },
                                     deck_id: { type: "string", example: "673000000000000000000001" },
-                                    limit: { type: "integer", default: 20, example: 20 }
+                                    session_id: { type: "string", example: "673000000000000000000002" },
+                                    exclude_phrase_ids: {
+                                        type: "array",
+                                        items: { type: "string" },
+                                        example: ["p_dQw4w9WgXcQ_1_1"]
+                                    },
+                                    exclude_row_ids: {
+                                        type: "array",
+                                        items: { type: "string" },
+                                        example: ["row_1"]
+                                    }
                                 }
                             }
                         }
                     }
                 },
                 responses: {
-                    201: { description: "Study session created with flashcard phrases" }
+                    200: {
+                        description: "Flashcard retrieved with adaptive AI difficulty decision",
+                        content: {
+                            "application/json": {
+                                schema: {
+                                    type: "object",
+                                    properties: {
+                                        status: { type: "string", example: "success" },
+                                        message: { type: "string", example: "Study flashcard retrieved successfully" },
+                                        data: {
+                                            type: "object",
+                                            properties: {
+                                                session_id: { type: "string" },
+                                                song_id: { type: "string", nullable: true },
+                                                deck_id: { type: "string", nullable: true },
+                                                total_cards: { type: "integer", example: 1 },
+                                                difficulty_decision: {
+                                                    type: "object",
+                                                    properties: {
+                                                        difficulty: { type: "string", example: "hard" },
+                                                        target_weight_min: { type: "integer", example: 8 },
+                                                        target_weight_max: { type: "integer", example: 10 },
+                                                        reasoning: { type: "string", example: "Pengguna konsisten menjawab 'easy' hari ini." },
+                                                        source: { type: "string", example: "ai" }
+                                                    }
+                                                },
+                                                card: { type: "object" }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         },

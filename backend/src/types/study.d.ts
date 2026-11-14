@@ -69,6 +69,9 @@ export interface IStudyCard {
 export interface StudySessionBody {
     song_id?: string;
     deck_id?: string;
+    session_id?: string;
+    exclude_phrase_ids?: string[];
+    exclude_row_ids?: Array<string | number>;
     limit?: number;
 }
 

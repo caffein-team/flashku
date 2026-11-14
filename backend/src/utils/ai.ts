@@ -312,3 +312,194 @@ export async function enrichBatchWithAi(
         return { row_translations: {}, vocabulary_meanings: {} };
     }
 }
+
+export interface DifficultyDecision {
+    difficulty: "easy" | "medium" | "hard";
+    target_weight_min: number;
+    target_weight_max: number;
+    reasoning: string;
+    source: "ai" | "heuristic";
+}
+
+/**
+ * Instant heuristic calculation of flashcard difficulty based on student's reviews today.
+ * Fallback when AI service is unavailable, slow, or rate-limited.
+ */
+export function calculateDifficultyHeuristic(summary: {
+    userLevel: number;
+    totalReviewsToday: number;
+    ratingsToday: Record<string, number>;
+    recentRatings: string[];
+    lastRating?: string | null;
+}): DifficultyDecision {
+    const { userLevel, recentRatings, lastRating } = summary;
+
+    // If user struggled on recent card(s) (rated 'again' or 'hard')
+    if (lastRating === "again" || (recentRatings.length >= 2 && recentRatings.slice(-2).includes("again"))) {
+        return {
+            difficulty: "easy",
+            target_weight_min: 1,
+            target_weight_max: 6,
+            reasoning: "Pengguna baru saja mengalami kesulitan (rating 'again'). Tingkat kesulitan diturunkan ke frasa dasar untuk memperkuat pemahaman.",
+            source: "heuristic"
+        };
+    }
+
+    if (lastRating === "hard") {
+        return {
+            difficulty: "easy",
+            target_weight_min: 2,
+            target_weight_max: 7,
+            reasoning: "Pengguna menandai kartu terakhir 'hard'. Menurunkan tingkat kesulitan ke kosakata yang lebih sederhana agar tidak kewalahan.",
+            source: "heuristic"
+        };
+    }
+
+    // Check streak of easy / good
+    const recentEasyCount = recentRatings.filter((r) => r === "easy").length;
+    const recentGoodCount = recentRatings.filter((r) => r === "good").length;
+
+    if (recentEasyCount >= 2 || (lastRating === "easy" && recentGoodCount + recentEasyCount >= 3)) {
+        return {
+            difficulty: "hard",
+            target_weight_min: 8,
+            target_weight_max: 10,
+            reasoning: "Pengguna konsisten menjawab 'easy' hari ini. Tingkat kesulitan dinaikkan ke kosakata berbobot tinggi (Noun & Verb kompleks).",
+            source: "heuristic"
+        };
+    }
+
+    if (lastRating === "good") {
+        return {
+            difficulty: "medium",
+            target_weight_min: 5,
+            target_weight_max: 9,
+            reasoning: "Performa pengguna stabil (rating 'good'). Menyajikan kosakata menengah yang seimbang.",
+            source: "heuristic"
+        };
+    }
+
+    // Baseline based on user's current level
+    if (userLevel >= 4) {
+        return {
+            difficulty: "hard",
+            target_weight_min: 7,
+            target_weight_max: 10,
+            reasoning: `Menyesuaikan Level ${userLevel}: menyajikan kosakata berbobot tinggi.`,
+            source: "heuristic"
+        };
+    } else if (userLevel >= 2) {
+        return {
+            difficulty: "medium",
+            target_weight_min: 4,
+            target_weight_max: 8,
+            reasoning: `Menyesuaikan Level ${userLevel}: menyajikan kosakata umum tingkat menengah.`,
+            source: "heuristic"
+        };
+    }
+
+    return {
+        difficulty: "easy",
+        target_weight_min: 1,
+        target_weight_max: 6,
+        reasoning: "Tingkat pemula: menyajikan kosakata dasar yang mudah dipelajari.",
+        source: "heuristic"
+    };
+}
+
+/**
+ * Asks Groq AI to evaluate student's review performance today and adjust difficulty for the next card.
+ * Uses a 3-second timeout and seamlessly falls back to the deterministic heuristic.
+ */
+export async function decideDifficultyWithAi(summary: {
+    userLevel: number;
+    totalReviewsToday: number;
+    ratingsToday: Record<string, number>;
+    recentRatings: string[];
+    lastRating?: string | null;
+}): Promise<DifficultyDecision> {
+    const config = getAiConfig();
+    const fallback = calculateDifficultyHeuristic(summary);
+
+    if (!config.apiKey) {
+        return fallback;
+    }
+
+    const systemPrompt =
+        "You are Flashku's adaptive Japanese learning difficulty AI.\n" +
+        "Analyze the student's flashcard review performance today and decide the optimal difficulty for the NEXT flashcard.\n" +
+        "Rules:\n" +
+        "- If user recently rated 'again' or 'hard', DECREASE difficulty to 'easy' (min_weight: 1-2, max_weight: 5-7) so they don't get overwhelmed.\n" +
+        "- If user recently rated 'easy' or consecutive 'good', INCREASE difficulty to 'hard' (min_weight: 8, max_weight: 10) to challenge them.\n" +
+        "- If performance is balanced or normal, maintain 'medium' (min_weight: 5, max_weight: 8).\n" +
+        "- Output strictly valid JSON with keys:\n" +
+        '  "difficulty": "easy" | "medium" | "hard",\n' +
+        '  "target_weight_min": number (1-10),\n' +
+        '  "target_weight_max": number (1-10),\n' +
+        '  "reasoning": "1 short sentence in Indonesian explaining the decision based on today\'s reviews"\n';
+
+    const userPrompt =
+        "Input Data for difficulty decision (respond in JSON format):\n" +
+        JSON.stringify({
+            user_level: summary.userLevel,
+            total_reviews_today: summary.totalReviewsToday,
+            ratings_breakdown_today: summary.ratingsToday,
+            recent_ratings_order: summary.recentRatings,
+            last_rating: summary.lastRating || null
+        });
+
+    try {
+        const groq = getGroqClient(config.apiKey, config.baseUrl, config.proxyUrl);
+
+        // Limit timeout to 3000ms so study session responses stay snappy
+        const aiPromise = groq.chat.completions.create({
+            model: config.model,
+            messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: userPrompt }
+            ],
+            response_format: { type: "json_object" },
+            max_tokens: 250,
+            temperature: 0.2
+        });
+
+        const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("AI difficulty decision timeout")), 3000)
+        );
+
+        const completion = await Promise.race([aiPromise, timeoutPromise]);
+        const content = completion?.choices?.[0]?.message?.content || "";
+        let cleanText = content.trim();
+        const firstBrace = cleanText.indexOf("{");
+        const lastBrace = cleanText.lastIndexOf("}");
+        if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+            cleanText = cleanText.substring(firstBrace, lastBrace + 1);
+        }
+
+        const parsed = JSON.parse(cleanText);
+        if (
+            parsed.difficulty &&
+            typeof parsed.target_weight_min === "number" &&
+            typeof parsed.target_weight_max === "number"
+        ) {
+            const validDifficulty = ["easy", "medium", "hard"].includes(parsed.difficulty)
+                ? (parsed.difficulty as "easy" | "medium" | "hard")
+                : fallback.difficulty;
+
+            return {
+                difficulty: validDifficulty,
+                target_weight_min: Math.max(1, Math.min(10, parsed.target_weight_min)),
+                target_weight_max: Math.max(1, Math.min(10, parsed.target_weight_max)),
+                reasoning:
+                    typeof parsed.reasoning === "string" && parsed.reasoning.trim()
+                        ? parsed.reasoning.trim()
+                        : fallback.reasoning,
+                source: "ai"
+            };
+        }
+        return fallback;
+    } catch (err: any) {
+        console.warn(`[AI Difficulty Decision Notice]: ${err?.message || err}. Using heuristic.`);
+        return fallback;
+    }
+}

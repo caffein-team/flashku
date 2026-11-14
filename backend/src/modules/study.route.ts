@@ -16,6 +16,7 @@ import {
 import { IUser } from "../types/auth";
 import { getPhraseWeight, isMeaningfulPhrase, isParticle } from "../utils/japanese";
 import { calculateNewLevel } from "../utils/level";
+import { decideDifficultyWithAi } from "../utils/ai";
 
 const StudyRouter = express.Router();
 
@@ -31,14 +32,23 @@ const RATING_MAP: Record<SRSGradeRating, { grade: number; xp: number }> = {
 
 /**
  * POST /api/study/session
- * Create a new flashcard study session with due Japanese phrases
+ * Generate an adaptive flashcard (1 card per request) tailored to the student's review performance today.
+ * Features:
+ * - AI-driven adaptive difficulty (progresses to harder words on 'easy', drops to simpler words on 'hard/again')
+ * - Random phrase selection from the target difficulty pool
+ * - Avoids same lyric row as recently heard flashcards to prevent repetitive audio clips
  */
 StudyRouter.post("/session", async (req: Request, res: Response) => {
     try {
         const db = getDB();
         const user = req.user!;
-        const { song_id, deck_id, limit: rawLimit } = (req.body || {}) as StudySessionBody;
-        const limit = Math.min(Math.max(Number(rawLimit) || 20, 1), 100);
+        const {
+            song_id,
+            deck_id,
+            session_id,
+            exclude_phrase_ids = [],
+            exclude_row_ids = []
+        } = (req.body || {}) as StudySessionBody;
 
         let targetSongIds: ObjectId[] = [];
         let songOid: ObjectId | null = null;
@@ -86,23 +96,43 @@ StudyRouter.post("/session", async (req: Request, res: Response) => {
             targetSongIds = userSongs.map((us) => us.song_id);
         }
 
-        if (targetSongIds.length === 0) {
-            const sessionResult = await db.collection<IStudySession>("study_sessions").insertOne({
-                user_id: user._id!,
-                song_id: songOid,
-                deck_id: deckOid,
-                total_phrases: 0,
-                created_at: new Date()
-            });
+        // Retrieve existing session or initialize new one
+        let currentSessionId: ObjectId | null = null;
+        if (session_id) {
+            if (ObjectId.isValid(session_id)) {
+                const foundSession = await db.collection<IStudySession>("study_sessions").findOne({
+                    _id: new ObjectId(session_id),
+                    user_id: user._id!
+                });
+                if (foundSession) {
+                    currentSessionId = foundSession._id!;
+                    if (!songOid && foundSession.song_id) songOid = foundSession.song_id;
+                    if (!deckOid && foundSession.deck_id) deckOid = foundSession.deck_id;
+                }
+            }
+        }
 
-            return res.status(201).json({
+        if (targetSongIds.length === 0) {
+            if (!currentSessionId) {
+                const sessionResult = await db.collection<IStudySession>("study_sessions").insertOne({
+                    user_id: user._id!,
+                    song_id: songOid,
+                    deck_id: deckOid,
+                    total_phrases: 0,
+                    created_at: new Date()
+                });
+                currentSessionId = sessionResult.insertedId;
+            }
+
+            return res.status(200).json({
                 status: "success",
                 message: "No study cards available in the selected scope",
                 data: {
-                    session_id: sessionResult.insertedId,
+                    session_id: currentSessionId,
                     song_id: songOid,
                     deck_id: deckOid,
                     total_cards: 0,
+                    card: null,
                     cards: []
                 }
             });
@@ -113,17 +143,23 @@ StudyRouter.post("/session", async (req: Request, res: Response) => {
             .find({ _id: { $in: targetSongIds } })
             .toArray();
 
-        // Extract all candidate cards from songs
+        // Extract all candidate cards and map phrase to its lyric row
         const candidateCards: Array<{
             card: IStudyCard;
             phrase_id: string;
+            lyric_row_id: string | number;
+            row_order: number;
+            weight: number;
         }> = [];
+        const phraseToRowMap = new Map<string, string | number>();
 
         for (const song of songs) {
             const lyricRows = song.lyric_rows || [];
             for (let rIdx = 0; rIdx < lyricRows.length; rIdx++) {
                 const row = lyricRows[rIdx];
                 const phrases = row.phrases || [];
+                const rowId = row.id || row.row_order || rIdx + 1;
+
                 for (let pIdx = 0; pIdx < phrases.length; pIdx++) {
                     const p = phrases[pIdx];
 
@@ -134,9 +170,13 @@ StudyRouter.post("/session", async (req: Request, res: Response) => {
 
                     const phraseId = p.phrase_id || p.id || `p_${song._id}_${row.row_order || rIdx + 1}_${p.word_order || pIdx + 1}`;
                     const phraseWeight = p.weight || getPhraseWeight(p.part_of_speech);
+                    phraseToRowMap.set(phraseId, rowId);
 
                     candidateCards.push({
                         phrase_id: phraseId,
+                        lyric_row_id: rowId,
+                        row_order: row.row_order || rIdx + 1,
+                        weight: phraseWeight,
                         card: {
                             phrase_id: phraseId,
                             surface_form: p.surface_form,
@@ -147,7 +187,7 @@ StudyRouter.post("/session", async (req: Request, res: Response) => {
                             part_of_speech: p.part_of_speech,
                             weight: phraseWeight,
                             meaning: p.meaning,
-                            lyric_row_id: row.id || row.row_order || rIdx + 1,
+                            lyric_row_id: rowId,
                             row_order: row.row_order || rIdx + 1,
                             raw_text: row.raw_text,
                             row_romaji: row.romaji || row.romanization || null,
@@ -172,26 +212,31 @@ StudyRouter.post("/session", async (req: Request, res: Response) => {
             }
         }
 
+        if (candidateCards.length === 0) {
+            return res.status(200).json({
+                status: "success",
+                message: "No Japanese vocabulary phrases found in the songs",
+                data: {
+                    session_id: currentSessionId,
+                    song_id: songOid,
+                    deck_id: deckOid,
+                    total_cards: 0,
+                    card: null,
+                    cards: []
+                }
+            });
+        }
+
+        // Attach SRS statistics for candidate phrases
         const candidatePhraseIds = candidateCards.map((c) => c.phrase_id);
-        const statsList = candidatePhraseIds.length > 0
-            ? await db.collection<IUserPhraseStats>("user_phrase_stats")
-                .find({
-                    user_id: user._id!,
-                    phrase_id: { $in: candidatePhraseIds }
-                })
-                .toArray()
-            : [];
+        const statsList = await db.collection<IUserPhraseStats>("user_phrase_stats")
+            .find({
+                user_id: user._id!,
+                phrase_id: { $in: candidatePhraseIds }
+            })
+            .toArray();
 
         const statsMap = new Map(statsList.map((s) => [s.phrase_id, s]));
-        const now = new Date();
-
-        // Attach stats and filter for cards due for review
-        const dueCards: Array<{
-            card: IStudyCard;
-            priority_score: number;
-            next_review_at: Date | null;
-            row_order: number;
-        }> = [];
 
         for (const item of candidateCards) {
             const stats = statsMap.get(item.phrase_id);
@@ -204,88 +249,145 @@ StudyRouter.post("/session", async (req: Request, res: Response) => {
                 if (stats.weight) item.card.weight = stats.weight;
                 if (stats.lapse_count) item.card.lapse_count = stats.lapse_count;
             }
+        }
 
-            // A card is due if it has never been reviewed or review date has passed
-            const isDue = !stats?.next_review_at || new Date(stats.next_review_at) <= now;
-            if (isDue) {
-                const nextReviewDate = stats?.next_review_at ? new Date(stats.next_review_at) : null;
-                const weight = item.card.weight || 1;
+        // Fetch user's reviews from today to evaluate performance parameters
+        const startOfDay = new Date();
+        startOfDay.setHours(0, 0, 0, 0);
 
-                // Priority score:
-                // High-value vocabulary (Verbs/Nouns: 10, Adjectives: 8, Adverbs: 7) and cards that
-                // the user finds difficult (again/hard/low EF/high lapses) are prioritized to appear frequently.
-                let priorityScore: number;
-                if (!nextReviewDate) {
-                    // New unreviewed cards: score directly proportional to vocabulary value (10 to 100)
-                    priorityScore = weight * 10;
-                } else {
-                    // Cards due for review: base 100 ensures scheduled memory reviews are sustained
-                    let difficultyBoost = 0;
-                    const lastRating = stats?.last_rating;
-                    if (lastRating === "again") {
-                        difficultyBoost += 60; // Cards failed on last attempt get highest priority to reappear!
-                    } else if (lastRating === "hard") {
-                        difficultyBoost += 35; // Cards marked difficult get strong priority boost
-                    } else if (lastRating === "easy") {
-                        difficultyBoost -= 15; // Easy cards yield priority to harder cards
-                    }
+        const todayAttempts = await db.collection<IStudyAttempt>("study_attempts")
+            .find({
+                user_id: user._id!,
+                created_at: { $gte: startOfDay }
+            })
+            .sort({ created_at: -1 })
+            .toArray();
 
-                    // Historical difficulty bonus: low ease factor (< 2.5) or frequent lapses
-                    const currentEf = stats?.ease_factor || 2.5;
-                    if (currentEf < 2.5) {
-                        difficultyBoost += Math.round((2.5 - currentEf) * 20); // up to +24 for EF 1.3
-                    }
-                    const lapses = stats?.lapse_count || 0;
-                    if (lapses > 0) {
-                        difficultyBoost += Math.min(lapses * 10, 40); // up to +40 for persistent trouble words
-                    }
-
-                    // Hours overdue bonus
-                    const overdueHours = Math.max(0, (now.getTime() - nextReviewDate.getTime()) / (1000 * 60 * 60));
-                    const overdueBonus = Math.min((overdueHours / 24) * 10, 50);
-
-                    priorityScore = 100 + difficultyBoost + overdueBonus + (weight * 5);
-                }
-
-                dueCards.push({
-                    card: item.card,
-                    priority_score: priorityScore,
-                    next_review_at: nextReviewDate,
-                    row_order: item.card.row_order
-                });
+        const ratingsToday: Record<string, number> = {
+            again: 0,
+            hard: 0,
+            good: 0,
+            easy: 0
+        };
+        for (const attempt of todayAttempts) {
+            if (ratingsToday[attempt.rating] !== undefined) {
+                ratingsToday[attempt.rating]++;
             }
         }
 
-        // Sort by priority score descending:
-        // Highest weighted vocabulary and most urgent due cards appear first!
-        // If priority scores tie, preserve chronological lyric row order.
-        dueCards.sort((a, b) => {
-            if (b.priority_score !== a.priority_score) {
-                return b.priority_score - a.priority_score;
+        // Recent chronological sequence of ratings (latest up to 8 attempts)
+        const recentRatings = todayAttempts.slice(0, 8).map((a) => a.rating);
+        const lastRating = todayAttempts.length > 0 ? todayAttempts[0].rating : null;
+
+        // Ask AI for adaptive difficulty decision based on today's reviews
+        const difficultyDecision = await decideDifficultyWithAi({
+            userLevel: user.level || 1,
+            totalReviewsToday: todayAttempts.length,
+            ratingsToday,
+            recentRatings,
+            lastRating
+        });
+
+        // Track recently heard lyric rows & seen phrases to prevent repetitive music clips
+        const recentRowIds = new Set<string | number>(
+            (exclude_row_ids || []).map((id) => String(id))
+        );
+
+        // Add rows from the user's latest 5 attempts today to avoid repeating clips
+        const latestAttempts = todayAttempts.slice(0, 5);
+        for (const att of latestAttempts) {
+            const rowId = phraseToRowMap.get(att.phrase_id);
+            if (rowId !== undefined) {
+                recentRowIds.add(String(rowId));
             }
-            return a.row_order - b.row_order;
-        });
+        }
 
-        const selectedCards = dueCards.slice(0, limit).map((d) => d.card);
+        // Phrases seen recently today or explicitly excluded in request
+        const seenPhraseIds = new Set<string>([
+            ...(exclude_phrase_ids || []),
+            ...todayAttempts.map((a) => a.phrase_id)
+        ]);
 
-        // Record study session
-        const sessionResult = await db.collection<IStudySession>("study_sessions").insertOne({
-            user_id: user._id!,
-            song_id: songOid,
-            deck_id: deckOid,
-            total_phrases: selectedCards.length,
-            created_at: now
-        });
+        const minW = difficultyDecision.target_weight_min;
+        const maxW = difficultyDecision.target_weight_max;
 
-        return res.status(201).json({
-            status: "success",
-            message: "Study session started successfully",
-            data: {
-                session_id: sessionResult.insertedId,
+        // Categorize candidate cards into priority tiers:
+        // 1. Unseen phrase + Different lyric row + Matches AI target difficulty
+        // 2. Unseen phrase + Different lyric row (flexible weight)
+        // 3. Different lyric row + Matches AI target difficulty
+        // 4. Matches AI target difficulty (same row fallback if limited)
+        // 5. Any candidate card
+        const tier1 = candidateCards.filter(
+            (c) =>
+                !seenPhraseIds.has(c.phrase_id) &&
+                !recentRowIds.has(String(c.lyric_row_id)) &&
+                c.weight >= minW &&
+                c.weight <= maxW
+        );
+
+        const tier2 = candidateCards.filter(
+            (c) =>
+                !seenPhraseIds.has(c.phrase_id) &&
+                !recentRowIds.has(String(c.lyric_row_id))
+        );
+
+        const tier3 = candidateCards.filter(
+            (c) =>
+                !recentRowIds.has(String(c.lyric_row_id)) &&
+                c.weight >= minW &&
+                c.weight <= maxW
+        );
+
+        const tier4 = candidateCards.filter(
+            (c) => c.weight >= minW && c.weight <= maxW
+        );
+
+        const pool =
+            tier1.length > 0
+                ? tier1
+                : tier2.length > 0
+                ? tier2
+                : tier3.length > 0
+                ? tier3
+                : tier4.length > 0
+                ? tier4
+                : candidateCards;
+
+        // Random selection from the best available candidate pool!
+        const randomIndex = Math.floor(Math.random() * pool.length);
+        const selectedCard = pool[randomIndex].card;
+
+        // Session record management
+        const now = new Date();
+        if (currentSessionId) {
+            await db.collection<IStudySession>("study_sessions").updateOne(
+                { _id: currentSessionId },
+                {
+                    $inc: { total_phrases: 1 }
+                }
+            );
+        } else {
+            const sessionInsert = await db.collection<IStudySession>("study_sessions").insertOne({
+                user_id: user._id!,
                 song_id: songOid,
                 deck_id: deckOid,
-                total_cards: selectedCards.length,
-                cards: selectedCards
+                total_phrases: 1,
+                created_at: now
+            });
+            currentSessionId = sessionInsert.insertedId;
+        }
+
+        return res.status(200).json({
+            status: "success",
+            message: "Study flashcard retrieved successfully",
+            data: {
+                session_id: currentSessionId,
+                song_id: songOid,
+                deck_id: deckOid,
+                difficulty_decision: difficultyDecision,
+                card: selectedCard,
+                cards: [selectedCard], // Backward-compatibility
+                total_cards: 1
             }
         });
     } catch (err: unknown) {
