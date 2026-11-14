@@ -5,7 +5,7 @@ import { authenticateToken } from "../middlewares/auth.middleware";
 import { ILyricRow, ISong, IUserSong, SongImportBody, UpdateSongLyricsBody } from "../types/song";
 import { cleanTrackAndArtist, fetchLrcLibLyrics, parseLrc, parsePlainLyrics } from "../utils/lyrics";
 import { extractYouTubeId, fetchYouTubeData } from "../utils/youtube";
-import { tokenizeJapaneseBatch } from "../utils/japanese";
+import { isMeaningfulPhrase, tokenizeJapaneseBatch } from "../utils/japanese";
 import { checkAiQuotaStatus, enrichBatchWithAi } from "../utils/ai";
 
 const SongRouter = express.Router();
@@ -497,6 +497,7 @@ SongRouter.post("/:id/enrich-ai", async (req: Request, res: Response) => {
                 const tokensSet = new Set<string>();
                 if (Array.isArray(r.phrases)) {
                     for (const p of r.phrases) {
+                        if (!isMeaningfulPhrase(p)) continue;
                         if (p.dictionary_form) tokensSet.add(p.dictionary_form.trim());
                         if (p.surface_form) tokensSet.add(p.surface_form.trim());
                     }

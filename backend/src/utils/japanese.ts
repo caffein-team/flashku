@@ -16,6 +16,32 @@ const POS_MAP: Record<string, string> = {
     "連体詞": "Pre-noun Adjectival",
 };
 
+/**
+ * Validates whether a phrase is a meaningful linguistic token for flashcard study,
+ * rejecting empty strings, standalone punctuation, pure symbols, or standalone choonpu marks.
+ */
+export function isMeaningfulPhrase(phrase?: {
+    surface_form?: string;
+    dictionary_form?: string;
+    part_of_speech?: string;
+} | null): boolean {
+    if (!phrase) return false;
+    const surface = (phrase.surface_form || phrase.dictionary_form || "").trim();
+    if (!surface) return false;
+
+    // Reject explicit symbol / punctuation parts of speech
+    const pos = (phrase.part_of_speech || "").trim().toLowerCase();
+    const invalidPOS = ["symbol", "punctuation", "記号", "補助記号", "unknown"];
+    if (invalidPOS.includes(pos)) return false;
+
+    // Strip whitespace and prolonged sound marks (\u30FC)
+    const stripped = surface.replace(/[\s\u30FC]/gu, "");
+    if (!stripped) return false;
+
+    // Must contain at least one linguistic letter (Kanji, Hiragana, Katakana, Latin, etc.)
+    return /\p{L}/u.test(stripped);
+}
+
 let tokenizerPromise: Promise<Tokenizer<any>> | null = null;
 
 export function getTokenizer(): Promise<Tokenizer<any>> {
@@ -61,8 +87,8 @@ export async function tokenizeJapaneseBatch(lines: string[]): Promise<IPhrase[][
             const surface = (token.surface_form || "").trim();
             const posPrimary = token.pos;
 
-            // Skip empty tokens and Japanese punctuation/symbols
-            if (!surface || posPrimary === "記号") {
+            // Skip empty tokens, Japanese punctuation, and pure symbols
+            if (!isMeaningfulPhrase({ surface_form: surface, part_of_speech: posPrimary })) {
                 continue;
             }
 

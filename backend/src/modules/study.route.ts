@@ -14,6 +14,7 @@ import {
     StudySessionBody
 } from "../types/study";
 import { IUser } from "../types/auth";
+import { isMeaningfulPhrase } from "../utils/japanese";
 
 const StudyRouter = express.Router();
 
@@ -124,6 +125,12 @@ StudyRouter.post("/session", async (req: Request, res: Response) => {
                 const phrases = row.phrases || [];
                 for (let pIdx = 0; pIdx < phrases.length; pIdx++) {
                     const p = phrases[pIdx];
+
+                    // Filter out phrases that are only symbols, punctuation, or non-meaningful tokens
+                    if (!isMeaningfulPhrase(p)) {
+                        continue;
+                    }
+
                     const phraseId = p.phrase_id || p.id || `p_${song._id}_${row.row_order || rIdx + 1}_${p.word_order || pIdx + 1}`;
 
                     candidateCards.push({
