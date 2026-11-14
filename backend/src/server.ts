@@ -24,7 +24,26 @@ app.use(cors({
 }));
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
+app.use(express.json({ strict: false }));
+
+// Normalize request body so null/undefined bodies become empty objects
+app.use((req: Request, _res: Response, next) => {
+    if (!req.body || typeof req.body !== "object") {
+        req.body = {};
+    }
+    next();
+});
+
+// Graceful JSON syntax error handling
+app.use((err: any, _req: Request, res: Response, next: any) => {
+    if (err instanceof SyntaxError && "body" in err && (err as any).status === 400) {
+        return res.status(400).json({
+            status: "fail",
+            message: "Invalid JSON format in request body"
+        });
+    }
+    next(err);
+});
 
 // Setup Swagger API Documentation on /api/docs
 setupSwagger(app);

@@ -36,7 +36,7 @@ StudyRouter.post("/session", async (req: Request, res: Response) => {
     try {
         const db = getDB();
         const user = req.user!;
-        const { song_id, deck_id, limit: rawLimit } = req.body as StudySessionBody;
+        const { song_id, deck_id, limit: rawLimit } = (req.body || {}) as StudySessionBody;
         const limit = Math.min(Math.max(Number(rawLimit) || 20, 1), 100);
 
         let targetSongIds: ObjectId[] = [];
@@ -302,7 +302,7 @@ StudyRouter.post("/review", async (req: Request, res: Response) => {
     try {
         const db = getDB();
         const user = req.user!;
-        const { session_id, phrase_id, rating } = req.body as StudyReviewBody;
+        const { session_id, phrase_id, rating } = (req.body || {}) as StudyReviewBody;
 
         if (!session_id || !ObjectId.isValid(session_id)) {
             return res.status(400).json({
