@@ -15,6 +15,7 @@ import {
 } from "../types/study";
 import { IUser } from "../types/auth";
 import { getPhraseWeight, isMeaningfulPhrase, isParticle } from "../utils/japanese";
+import { calculateNewLevel } from "../utils/level";
 
 const StudyRouter = express.Router();
 
@@ -342,7 +343,8 @@ StudyRouter.post("/review", async (req: Request, res: Response) => {
 
         const ratingInfo = RATING_MAP[rating];
         const grade = ratingInfo.grade;
-        const xpEarned = ratingInfo.xp;
+        // Every card review completion grants 10 XP
+        const xpEarned = 10;
 
         // Record study attempt
         const now = new Date();
@@ -447,20 +449,32 @@ StudyRouter.post("/review", async (req: Request, res: Response) => {
             { upsert: true }
         );
 
-        // Progression: update user level if repetitions milestone reached (every 10 reps)
-        let userLevel = user.level || 1;
-        if (newReps > 0 && newReps % 10 === 0) {
-            const updatedUserResult = await db.collection<IUser>("users").findOneAndUpdate(
-                { _id: user._id! },
-                { $inc: { level: 1 } },
-                { returnDocument: "after" }
-            );
-            userLevel = updatedUserResult?.level || (userLevel + 1);
-        }
+        // User Progression: Award 10 XP and calculate level progression
+        const freshUser = await db.collection<IUser>("users").findOne({ _id: user._id! });
+        const levelProg = calculateNewLevel(
+            freshUser?.level ?? 1,
+            freshUser?.xp ?? 0,
+            freshUser?.total_xp ?? 0,
+            xpEarned
+        );
+
+        await db.collection<IUser>("users").updateOne(
+            { _id: user._id! },
+            {
+                $set: {
+                    level: levelProg.level,
+                    xp: levelProg.xp,
+                    total_xp: levelProg.total_xp,
+                    updated_at: now
+                }
+            }
+        );
 
         return res.status(200).json({
             status: "success",
-            message: "Card review recorded successfully",
+            message: levelProg.leveled_up
+                ? `Card review recorded! Level Up! You reached Level ${levelProg.level}!`
+                : "Card review recorded successfully",
             data: {
                 phrase_id: phrase_id,
                 session_id: session_id,
@@ -472,7 +486,12 @@ StudyRouter.post("/review", async (req: Request, res: Response) => {
                 lapse_count: newLapseCount,
                 next_review_at: nextReviewAt,
                 xp_earned: xpEarned,
-                user_level: userLevel
+                user_level: levelProg.level,
+                user_xp: levelProg.xp,
+                xp_required: levelProg.xp_required,
+                total_xp: levelProg.total_xp,
+                xp_progress_percentage: levelProg.xp_progress_percentage,
+                leveled_up: levelProg.leveled_up
             }
         });
     } catch (err: unknown) {

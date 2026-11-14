@@ -13,10 +13,13 @@ AuthRouter.post('/register', async(req: Request, res: Response) => {
         const  { name, email, password } = req.body;
         const errors: Record<string, string> = {};
         let new_user: IUser = {
-            name : name, 
-            email: email, 
+            name: name,
+            email: email,
+            level: 1,
+            xp: 0,
+            total_xp: 0,
             created_at: new Date()
-        }
+        };
 
         // name validation
         if(name){

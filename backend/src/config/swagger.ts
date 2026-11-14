@@ -172,6 +172,43 @@ export const swaggerSpec = {
             }
         },
         "/api/users/profile": {
+            get: {
+                tags: ["Users"],
+                summary: "Get current authenticated user profile, avatar, level, XP, and progression",
+                security: [{ BearerAuth: [] }],
+                responses: {
+                    200: {
+                        description: "User profile with level, current XP, XP required to level up, and total XP",
+                        content: {
+                            "application/json": {
+                                schema: {
+                                    type: "object",
+                                    properties: {
+                                        status: { type: "string", example: "success" },
+                                        message: { type: "string", example: "User profile retrieved successfully" },
+                                        data: {
+                                            type: "object",
+                                            properties: {
+                                                id: { type: "string", example: "673000000000000000000000" },
+                                                name: { type: "string", example: "John Doe" },
+                                                username: { type: "string", example: "johndoe" },
+                                                email: { type: "string", example: "user@example.com" },
+                                                avatar: { type: "string", nullable: true, example: "https://domain.com/uploads/avatars/user.jpg" },
+                                                level: { type: "integer", example: 2 },
+                                                xp: { type: "integer", example: 40 },
+                                                xp_required: { type: "integer", example: 200 },
+                                                total_xp: { type: "integer", example: 140 },
+                                                xp_progress_percentage: { type: "integer", example: 20 },
+                                                created_at: { type: "string", format: "date-time" }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
             patch: {
                 tags: ["Users"],
                 summary: "Update current user's profile (name, username)",

@@ -11,6 +11,8 @@ export interface IUser {
     password?: string;
     avatar?: string | null;
     level?: number;
+    xp?: number;
+    total_xp?: number;
     created_at: Date;
     updated_at?: Date;
 }

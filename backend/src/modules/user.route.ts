@@ -6,6 +6,7 @@ import { getDB } from "../config/db";
 import { authenticateToken } from "../middlewares/auth.middleware";
 import { IUser } from "../types/auth";
 import { hashPassword, verifyPassword } from "../utils/password";
+import { getXpRequiredForLevel } from "../utils/level";
 
 const UserRouter = express.Router();
 
@@ -61,6 +62,59 @@ function deleteLocalAvatarFile(avatarUrl?: string | null) {
         }
     }
 }
+
+/**
+ * GET /api/users/profile
+ * Get current authenticated user profile, avatar URL, level, XP, and progression
+ */
+UserRouter.get(["/profile", "/me"], async (req: Request, res: Response) => {
+    try {
+        const db = getDB();
+        const user = await db.collection<IUser>("users").findOne({ _id: req.user!._id });
+        if (!user) {
+            return res.status(404).json({
+                status: "fail",
+                message: "User not found"
+            });
+        }
+
+        const level = user.level || 1;
+        const xp = user.xp || 0;
+        const totalXp = user.total_xp || 0;
+        const xpRequired = getXpRequiredForLevel(level);
+        const xpPercentage = Math.min(100, Math.floor((xp / xpRequired) * 100));
+
+        const baseUrl = process.env.APP_URL || `${req.protocol}://${req.get("host")}`;
+        const avatarUrl = user.avatar
+            ? (user.avatar.startsWith("http") ? user.avatar : `${baseUrl}${user.avatar}`)
+            : null;
+
+        return res.status(200).json({
+            status: "success",
+            message: "User profile retrieved successfully",
+            data: {
+                id: user._id,
+                name: user.name,
+                username: user.username,
+                email: user.email,
+                avatar: avatarUrl,
+                level: level,
+                xp: xp,
+                xp_required: xpRequired,
+                total_xp: totalXp,
+                xp_progress_percentage: xpPercentage,
+                created_at: user.created_at,
+                updated_at: user.updated_at
+            }
+        });
+    } catch (err: unknown) {
+        console.error("[Get Profile Error]:", err);
+        return res.status(500).json({
+            status: "error",
+            message: "Internal server error"
+        });
+    }
+});
 
 /**
  * PATCH /api/users/profile
@@ -123,10 +177,34 @@ UserRouter.patch("/profile", async (req: Request, res: Response) => {
             delete updatedUser.password;
         }
 
+        const level = updatedUser?.level || 1;
+        const xp = updatedUser?.xp || 0;
+        const totalXp = updatedUser?.total_xp || 0;
+        const xpRequired = getXpRequiredForLevel(level);
+        const xpPercentage = Math.min(100, Math.floor((xp / xpRequired) * 100));
+
+        const baseUrl = process.env.APP_URL || `${req.protocol}://${req.get("host")}`;
+        const avatarUrl = updatedUser?.avatar
+            ? (updatedUser.avatar.startsWith("http") ? updatedUser.avatar : `${baseUrl}${updatedUser.avatar}`)
+            : null;
+
         return res.status(200).json({
             status: "success",
             message: "Profile updated successfully",
-            data: updatedUser
+            data: {
+                id: updatedUser?._id,
+                name: updatedUser?.name,
+                username: updatedUser?.username,
+                email: updatedUser?.email,
+                avatar: avatarUrl,
+                level: level,
+                xp: xp,
+                xp_required: xpRequired,
+                total_xp: totalXp,
+                xp_progress_percentage: xpPercentage,
+                created_at: updatedUser?.created_at,
+                updated_at: updatedUser?.updated_at
+            }
         });
     } catch (err: unknown) {
         console.error("[Update Profile Error]:", err);
